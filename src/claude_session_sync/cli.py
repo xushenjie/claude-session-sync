@@ -190,12 +190,12 @@ def term_width():
 
 def short_path(path):
     """把家目录缩写成 ~，让路径短一点。"""
-    home = str(HOME)
-    if path == home:
-        return "~"
-    for sep in ("/", "\\"):
-        if path.startswith(home + sep):
-            return "~" + path[len(home) :]
+    for home in dict.fromkeys((str(HOME), HOME.as_posix())):  # Windows 上记录里的路径可能用正斜杠
+        if path == home:
+            return "~"
+        for sep in ("/", "\\"):
+            if path.startswith(home + sep):
+                return "~" + path[len(home) :]
     return path
 
 
