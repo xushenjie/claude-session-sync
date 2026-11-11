@@ -40,7 +40,7 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 HOME = Path.home()
 JOURNAL_DIR = HOME / ".claude-desktop-sync"

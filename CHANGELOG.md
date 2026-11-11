@@ -4,6 +4,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-11
+
 ### Fixed
 - Links in the README (Chinese version, CONTRIBUTING, SECURITY, LICENSE) were relative and returned 404 on the PyPI project page; they now point to GitHub.
 
@@ -24,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/xushenjie/claude-session-sync/releases/tag/v0.1.0
