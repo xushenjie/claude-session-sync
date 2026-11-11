@@ -38,7 +38,7 @@ import subprocess
 import sys
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 __version__ = "0.1.0"
 
@@ -209,6 +209,21 @@ def text_of(content):
     return ""
 
 
+def is_abs_any(p):
+    """不管当前是什么系统，POSIX 或 Windows 风格的绝对路径都算。
+    （Python 3.13 起 Windows 上 os.path.isabs("/x") 返回 False，而记录可能来自别的系统。）"""
+    return isinstance(p, str) and (PurePosixPath(p).is_absolute() or PureWindowsPath(p).is_absolute())
+
+
+def use_safe_stdio():
+    """会话标题可能含任意字符；输出被重定向到非 UTF-8 编码时替换掉无法编码的字符，而不是报错。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def parse_session(path):
     """读取 .jsonl，返回会话信息；没有用户消息或没有 cwd 的返回 None。"""
     cwd = None
@@ -227,7 +242,7 @@ def parse_session(path):
                     continue
                 if not isinstance(o, dict):
                     continue
-                if not cwd and isinstance(o.get("cwd"), str) and os.path.isabs(o["cwd"]):
+                if not cwd and is_abs_any(o.get("cwd")):
                     cwd = o["cwd"]
                 ts = o.get("timestamp")
                 if isinstance(ts, str):
@@ -522,6 +537,7 @@ def purge_archived(indexes, archived_ids, projects, apply, trash, excluded=(), p
 
 
 def main(argv=None):
+    use_safe_stdio()
     ap = argparse.ArgumentParser(
         prog="claude-session-sync",
         formatter_class=argparse.RawDescriptionHelpFormatter,

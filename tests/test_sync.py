@@ -331,3 +331,27 @@ def test_show_template(env, capsys):
     out = capsys.readouterr().out
     assert '"cliSessionId": "existing"' in out
     assert "(no usable template)" in out
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/work/demo", True),
+        ("C:\\work\\demo", True),
+        ("\\\\server\\share\\demo", True),
+        ("relative/demo", False),
+        ("C:relative", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_abs_any(path, expected):
+    assert cli.is_abs_any(path) is expected
+
+
+def test_windows_style_cwd_is_accepted(env):
+    env.add_index("existing")
+    env.add_cli_session("win", cwd="C:\\work\\demo")
+    env.run("--apply")
+    entry = next(e for e in env.index_entries() if e["cliSessionId"] == "win")
+    assert entry["cwd"] == "C:\\work\\demo"
