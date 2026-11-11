@@ -4,6 +4,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Links in the README (Chinese version, CONTRIBUTING, SECURITY, LICENSE) were relative and returned 404 on the PyPI project page; they now point to GitHub.
+
 ## [0.1.1] - 2026-11-11
 
 ### Added

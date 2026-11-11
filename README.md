@@ -1,6 +1,6 @@
 # claude-session-sync
 
-**English** | [简体中文](README.zh-CN.md)
+**English** | [简体中文](https://github.com/xushenjie/claude-session-sync/blob/main/README.zh-CN.md)
 
 [![CI](https://github.com/xushenjie/claude-session-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/xushenjie/claude-session-sync/actions/workflows/ci.yml)
 
@@ -199,7 +199,7 @@ Use the package name `claude-session-sync-cli` (not the command name) with your 
 |---|---|---|
 | uv | `uv tool upgrade claude-session-sync-cli` | `uv tool uninstall claude-session-sync-cli` |
 | pipx | `pipx upgrade claude-session-sync-cli` | `pipx uninstall claude-session-sync-cli` |
-| single file | re-run the `curl` command from [Install](#install) | delete `cli.py` |
+| single file | re-run the `curl` command from [Install](https://github.com/xushenjie/claude-session-sync#install) | delete `cli.py` |
 
 Not sure which one you used? `uv tool list` or `pipx list` will show it.
 
@@ -247,8 +247,8 @@ claude --desktop --resume <session-id>
 
 ## Contributing
 
-Issues and pull requests are welcome, in English or Chinese. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests, commit conventions, and releasing. Please report anything that could lose or leak data privately, as described in [SECURITY.md](SECURITY.md).
+Issues and pull requests are welcome, in English or Chinese. See [CONTRIBUTING.md](https://github.com/xushenjie/claude-session-sync/blob/main/CONTRIBUTING.md) for development setup, tests, commit conventions, and releasing. Please report anything that could lose or leak data privately, as described in [SECURITY.md](https://github.com/xushenjie/claude-session-sync/blob/main/SECURITY.md).
 
 ## License
 
-[MIT](LICENSE). Claude is a trademark of Anthropic. This project is not affiliated with Anthropic in any way.
+[MIT](https://github.com/xushenjie/claude-session-sync/blob/main/LICENSE). Claude is a trademark of Anthropic. This project is not affiliated with Anthropic in any way.
