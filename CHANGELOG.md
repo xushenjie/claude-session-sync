@@ -4,6 +4,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
+### Added
+- Account names in the output: the account the CLI is signed in to is recognized from `~/.claude.json`, every `--apply` remembers it in `~/.claude-desktop-sync/accounts.json`, and `--set-alias <id>=<name>` names any account. Emails are always masked.
+- `--account` accepts an ID prefix (such as the 8 characters shown in the output) and an optional `/<org-id-prefix>`; ambiguous prefixes are rejected.
+
 ## [0.1.3] - 2026-11-11
 
 ### Added
@@ -32,7 +38,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.0...v0.1.1

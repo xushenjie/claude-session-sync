@@ -11,6 +11,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "JOURNAL_DIR", e.journal)
     # 默认假装桌面端没在运行，避免开发机上开着桌面端时测试失败
     monkeypatch.setattr(cli, "desktop_running", lambda: False)
+    # 不读取开发机上真实的 ~/.claude.json，需要的测试自己设置
+    monkeypatch.setattr(cli, "cli_login_account", lambda: None)
     return e
 
 

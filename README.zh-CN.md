@@ -154,7 +154,8 @@ claude-session-sync --purge-archived --apply   # 执行
 | `--apply` | 实际写入 |
 | `--undo` | 撤销最近一次写入或删除 |
 | `--show-template` | 显示每个账号的模板字段后退出（排查用） |
-| `--account <账号ID>` | 只同步指定账号，可以写多次 |
+| `--account <账号ID>` | 只同步指定账号。写输出里显示的前 8 位就够了；加 `/<组织ID前缀>` 可以只选一个组织。可以写多次 |
+| `--set-alias <ID>=<名称>` | 给账号起显示名称（见[账号名称](#账号名称)），名称留空则删除。可以写多次，保存后退出 |
 | `--project <字符串>` | 只处理工作目录里包含这个字符串的会话（同步和清除都生效） |
 | `--exclude <会话ID>` | 排除某个会话，同步和清除都跳过，可以写多次 |
 | `--exclude-file <文件>` | 从文件读取排除列表，每行一个会话 ID |
@@ -175,7 +176,22 @@ claude-session-sync --account 1a2b3c4d-... --project myapp --apply
 claude-session-sync --exclude-file ~/no-sync.txt --apply
 ```
 
-会话 ID 就是 `~/.claude/projects/<项目>/` 下 `.jsonl` 文件的文件名；账号 ID 是 `claude-code-sessions/` 下第一层目录名，预览输出里会显示前 8 位。
+会话 ID 就是 `~/.claude/projects/<项目>/` 下 `.jsonl` 文件的文件名；账号 ID 是 `claude-code-sessions/` 下第一层目录名，预览输出里会显示前 8 位，`--account` 和 `--set-alias` 直接用这 8 位就行。
+
+### 账号名称
+
+桌面端只按 ID 存放账号，所以输出里会尽量把能找到的名称显示出来：
+
+```
+[工作号 · Acme Inc · fan***@example.com · 当前 CLI 登录] (b8073c71…/677f8bdf…) 已有 122，待补 1
+[07ac42e2…/00000000…] 已有 119，待补 1
+```
+
+- **CLI 当前登录的账号**：从 `~/.claude.json` 自动识别（只读取账号和组织 ID、邮箱、组织名）。
+- **CLI 以前登录过的账号**：每次 `--apply` 都会把当前 CLI 账号记到 `~/.claude-desktop-sync/accounts.json`，切换账号后仍然能显示名称。
+- **任意账号**：自己起别名，比如 `claude-session-sync --set-alias b8073c71=工作号`；写成 `<账号>/<组织>` 前缀可以只给某个组织起名。
+
+邮箱始终打码显示（如 `fan***@example.com`），因为这份输出经常会被贴进 issue。预览模式不会写入 `accounts.json`。
 
 ---
 
@@ -205,7 +221,7 @@ claude-session-sync --exclude-file ~/no-sync.txt --apply
 不记得用哪种方式装的，运行 `uv tool list` 或 `pipx list` 看一下。
 
 - **升级**会直接替换旧版本，命令名不变。再运行一次 `uv tool install` 不会升级，要用 `upgrade`。`~/.claude-desktop-sync/` 里的日志和备份会保留，升级后 `--undo` 依然可以撤销以前的操作。升级完可以用 `claude-session-sync --version` 确认版本。
-- **卸载只删除程序本身。** 已经同步到桌面端侧边栏的会话和 `~/.claude-desktop-sync/` 都会保留。想一并撤销，请在**卸载前**退出桌面端，反复运行 `claude-session-sync --undo`，直到提示没有可撤销的记录；不再需要备份的话，再手动删除 `~/.claude-desktop-sync/`。
+- **卸载只删除程序本身。** 已经同步到桌面端侧边栏的会话和 `~/.claude-desktop-sync/` 都会保留。想一并撤销，请在**卸载前**退出桌面端，反复运行 `claude-session-sync --undo`，直到提示没有可撤销的记录；不再需要备份的话，再手动删除 `~/.claude-desktop-sync/`（里面也存着账号名称和别名）。
 
 ---
 

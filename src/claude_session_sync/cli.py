@@ -33,6 +33,7 @@ import glob
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -40,7 +41,7 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 HOME = Path.home()
 JOURNAL_DIR = HOME / ".claude-desktop-sync"
@@ -578,6 +579,160 @@ def purge_archived(indexes, archived_ids, projects, apply, trash, excluded=(), p
     return created, moved
 
 
+# ---------------------------------------------------------------- 账号名称
+#
+# 桌面端只按 ID 存放账号目录，本机没有公开的地方记录其他账号的邮箱或组织名。
+# 名称来源（按优先级）：
+#   1. 用户用 --set-alias 起的别名
+#   2. CLI 当前登录的账号（~/.claude.json 的 oauthAccount）
+#   3. 以前 --apply 时记下的 CLI 账号信息（~/.claude-desktop-sync/accounts.json）
+# 邮箱一律打码后再显示，因为预览输出经常会被贴进 issue。
+
+EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+
+
+def mask_email(email):
+    local, _, domain = email.partition("@")
+    keep = min(3, max(1, len(local) // 2))
+    return f"{local[:keep]}***@{domain}"
+
+
+def mask_emails_in(text):
+    return EMAIL_RE.sub(lambda m: mask_email(m.group(0)), text)
+
+
+def accounts_file():
+    return JOURNAL_DIR / "accounts.json"
+
+
+def load_account_book():
+    try:
+        data = json.loads(accounts_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return {
+        "accounts": data.get("accounts") if isinstance(data.get("accounts"), dict) else {},
+        "aliases": data.get("aliases") if isinstance(data.get("aliases"), dict) else {},
+    }
+
+
+def save_account_book(book):
+    JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    p = accounts_file()
+    p.write_text(json.dumps({"version": 1, **book}, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(p, 0o600)  # 里面有邮箱，只让自己读
+    except OSError:
+        pass
+
+
+def cli_login_account():
+    """读取 CLI 当前登录账号，只取识别账号需要的字段。读不到返回 None。"""
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+    candidates = ([Path(cfg).expanduser() / ".claude.json"] if cfg else []) + [HOME / ".claude.json"]
+    for f in candidates:
+        try:
+            a = json.loads(f.read_text(encoding="utf-8")).get("oauthAccount")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(a, dict) and isinstance(a.get("accountUuid"), str):
+            return {
+                "account": a["accountUuid"],
+                "org": a.get("organizationUuid") or "",
+                "email": a.get("emailAddress") or "",
+                "org_name": a.get("organizationName") or "",
+            }
+    return None
+
+
+def remember_cli_account(book, cli_acct):
+    """把 CLI 当前账号记进账号簿；有变化返回 True。"""
+    if not cli_acct:
+        return False
+    key = f"{cli_acct['account']}/{cli_acct['org']}"
+    info = {"email": cli_acct["email"], "org_name": cli_acct["org_name"]}
+    old = book["accounts"].get(key) or {}
+    if {k: old.get(k) for k in info} == info:
+        return False
+    book["accounts"][key] = {**info, "seen_at": dt.datetime.now().isoformat(timespec="seconds")}
+    return True
+
+
+def account_label(acct, org, book, cli_acct):
+    """返回账号的可读名称（可能为空）。"""
+    parts = []
+    alias = book["aliases"].get(f"{acct}/{org}") or book["aliases"].get(acct)
+    if alias:
+        parts.append(alias)
+    is_cli = bool(cli_acct and cli_acct["account"] == acct and cli_acct["org"] == org)
+    info = (
+        {"email": cli_acct["email"], "org_name": cli_acct["org_name"]}
+        if is_cli
+        else book["accounts"].get(f"{acct}/{org}") or {}
+    )
+    email = mask_email(info["email"]) if EMAIL_RE.fullmatch(info.get("email") or "") else ""
+    org_name = mask_emails_in(info.get("org_name") or "")
+    if org_name and not (email and email in org_name):  # 个人组织名常常就是"邮箱's Organization"
+        parts.append(org_name)
+    if email:
+        parts.append(email)
+    if is_cli:
+        parts.append(t("current CLI login", "当前 CLI 登录"))
+    return " · ".join(parts)
+
+
+def account_heading(acct, org, book, cli_acct):
+    ids = f"{acct[:8]}…/{org[:8]}…"
+    label = account_label(acct, org, book, cli_acct)
+    return f"[{label}] ({ids})" if label else f"[{ids}]"
+
+
+def resolve_account_key(key, all_accts):
+    """把 <账号ID前缀>[/<组织ID前缀>] 解析成完整 ID。返回 (账号ID, 组织ID或None)；出错时退出。"""
+    acct_part, _, org_part = key.partition("/")
+    if not acct_part:
+        sys.exit(t(f"Invalid account ID: {key!r}", f"账号 ID 无效：{key!r}"))
+    pairs = {(a, o) for _, a, o, _ in all_accts if a.startswith(acct_part) and o.startswith(org_part)}
+    acct_ids = {a for a, _ in pairs}
+    if not pairs:
+        sys.exit(t(f"No account matches {key!r}.", f"没有匹配 {key!r} 的账号。"))
+    if len(acct_ids) > 1:
+        sys.exit(
+            t(
+                f"{key!r} matches several accounts: {', '.join(sorted(x[:8] for x in acct_ids))}. Use a longer prefix.",
+                f"{key!r} 匹配到多个账号：{', '.join(sorted(x[:8] for x in acct_ids))}。请写更长的前缀。",
+            )
+        )
+    acct = acct_ids.pop()
+    if not org_part:
+        return acct, None
+    if len(pairs) > 1:
+        sys.exit(t(f"{key!r} matches several organizations.", f"{key!r} 匹配到多个组织。"))
+    return acct, next(iter(pairs))[1]
+
+
+def set_aliases(specs, all_accts):
+    book = load_account_book()
+    for spec in specs:
+        key, sep, name = spec.partition("=")
+        if not sep:
+            sys.exit(
+                t(f"--set-alias expects ID=NAME, got {spec!r}", f"--set-alias 的格式是 ID=名称，收到的是 {spec!r}")
+            )
+        acct, org = resolve_account_key(key.strip(), all_accts)
+        full = f"{acct}/{org}" if org else acct
+        name = name.strip()
+        if name:
+            book["aliases"][full] = name
+            print(t(f"Alias set: {full} = {name}", f"已设置别名：{full} = {name}"))
+        else:
+            book["aliases"].pop(full, None)
+            print(t(f"Alias removed: {full}", f"已删除别名：{full}"))
+    save_account_book(book)
+
+
 # ---------------------------------------------------------------- 主流程
 
 
@@ -672,7 +827,21 @@ Notes:
     ap.add_argument(
         "--account",
         action="append",
-        help=t("only sync this account ID (repeatable)", "只同步指定账号ID（可多次使用）"),
+        help=t(
+            "only sync this account; an ID prefix such as the 8 characters shown in the output works, "
+            "add /<org-id-prefix> to pick one organization (repeatable)",
+            "只同步指定账号；可以只写输出里显示的前 8 位，加 /<组织ID前缀> 可只选一个组织（可多次使用）",
+        ),
+    )
+    ap.add_argument(
+        "--set-alias",
+        action="append",
+        metavar="ID=NAME",
+        help=t(
+            "give an account a display name, e.g. b8073c71=work (ID prefix, optionally /<org-id-prefix>); "
+            "an empty name removes it; repeatable, then exits",
+            "给账号起显示名称，如 b8073c71=工作号（ID 前缀，可加 /<组织ID前缀>）；名称留空则删除；可多次使用，设置完即退出",
+        ),
     )
     ap.add_argument(
         "--project",
@@ -754,10 +923,17 @@ Notes:
         )
 
     accts = account_dirs(roots)
-    if args.account:
-        accts = [a for a in accts if a[1] in args.account]
     if not accts:
         sys.exit(t("No account directories found.", "没有找到任何账号目录。"))
+    if args.set_alias:
+        set_aliases(args.set_alias, accts)
+        return
+    if args.account:
+        wanted = [resolve_account_key(v, accts) for v in args.account]
+        accts = [a for a in accts if any(a[1] == ac and (og is None or a[2] == og) for ac, og in wanted)]
+
+    book = load_account_book()
+    cli_acct = cli_login_account()
 
     excluded = set(args.exclude)
     if args.exclude_file:
@@ -804,7 +980,14 @@ Notes:
     if args.show_template:
         for _d, (acct, org, entries, _, _) in indexes.items():
             tpl = pick_template(entries)
-            print(t(f"\n[{acct}/{org}] {len(entries)} index file(s)", f"\n[{acct}/{org}] {len(entries)} 个索引文件"))
+            label = account_label(acct, org, book, cli_acct)
+            label = f" {label}" if label else ""
+            print(
+                t(
+                    f"\n[{acct}/{org}]{label} {len(entries)} index file(s)",
+                    f"\n[{acct}/{org}]{label} {len(entries)} 个索引文件",
+                )
+            )
             if tpl:
                 print(
                     json.dumps(
@@ -845,6 +1028,8 @@ Notes:
 
     if args.apply:
         ensure_desktop_stopped(args.force)
+        if remember_cli_account(book, cli_acct):
+            save_account_book(book)
 
     created = []
     for d, (acct, org, entries, known, archived) in indexes.items():
@@ -857,8 +1042,8 @@ Notes:
         ]
         print(
             t(
-                f"[{acct[:8]}…/{org[:8]}…] existing {len(known)}, to add {len(todo)}",
-                f"[{acct[:8]}…/{org[:8]}…] 已有 {len(known)}，待补 {len(todo)}",
+                f"{account_heading(acct, org, book, cli_acct)} existing {len(known)}, to add {len(todo)}",
+                f"{account_heading(acct, org, book, cli_acct)} 已有 {len(known)}，待补 {len(todo)}",
             )
         )
         if not template:

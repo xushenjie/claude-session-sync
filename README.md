@@ -154,7 +154,8 @@ claude-session-sync --purge-archived --apply   # do it
 | `--apply` | Actually write |
 | `--undo` | Undo the most recent write or deletion |
 | `--show-template` | Print each account's template fields and exit (for troubleshooting) |
-| `--account <account-id>` | Only sync this account; repeatable |
+| `--account <account-id>` | Only sync this account. A prefix such as the 8 characters in the output is enough; add `/<org-id-prefix>` to pick one organization. Repeatable |
+| `--set-alias <id>=<name>` | Give an account a display name (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)); an empty name removes it. Repeatable; exits after saving |
 | `--project <string>` | Only handle sessions whose working directory contains this string (sync and purge) |
 | `--exclude <session-id>` | Exclude a session from sync and purge; repeatable |
 | `--exclude-file <file>` | Read excluded session IDs from a file, one per line |
@@ -175,7 +176,22 @@ claude-session-sync --account 1a2b3c4d-... --project myapp --apply
 claude-session-sync --exclude-file ~/no-sync.txt --apply
 ```
 
-A session ID is the file name of a `.jsonl` under `~/.claude/projects/<project>/`. An account ID is a top-level directory name under `claude-code-sessions/`; the preview shows the first 8 characters.
+A session ID is the file name of a `.jsonl` under `~/.claude/projects/<project>/`. An account ID is a top-level directory name under `claude-code-sessions/`; the preview shows the first 8 characters, which `--account` and `--set-alias` accept as-is.
+
+### Account names
+
+The desktop app stores accounts by ID only, so the output shows names where it can find them:
+
+```
+[work · Acme Inc · fan***@example.com · current CLI login] (b8073c71…/677f8bdf…) existing 122, to add 1
+[07ac42e2…/00000000…] existing 119, to add 1
+```
+
+- **The account the CLI is signed in to** is recognized from `~/.claude.json` (only the account and organization IDs, email and organization name are read).
+- **Accounts the CLI was signed in to before**: every `--apply` remembers the current CLI account in `~/.claude-desktop-sync/accounts.json`, so it keeps its name after you switch.
+- **Any account**, with an alias you choose: `claude-session-sync --set-alias b8073c71=work`. Use `<account>/<org>` prefixes to name a single organization.
+
+Emails are always shown masked (`fan***@example.com`), because this output often ends up in bug reports. Previews never write `accounts.json`.
 
 ---
 
@@ -205,7 +221,7 @@ Use the package name `claude-session-sync-cli` (not the command name) with your 
 Not sure which one you used? `uv tool list` or `pipx list` will show it.
 
 - **Upgrading** replaces the old version in place; the command name stays the same. Running `uv tool install` again does not upgrade — use `upgrade`. Journals and backups in `~/.claude-desktop-sync/` are kept, so `--undo` still works across upgrades. Run `claude-session-sync --version` to confirm.
-- **Uninstalling removes only the program.** Sessions it added to the desktop sidebar and everything in `~/.claude-desktop-sync/` stay. To revert those too, quit the desktop app and run `claude-session-sync --undo` repeatedly *before* uninstalling, until it reports nothing left to undo; then delete `~/.claude-desktop-sync/` if you no longer need the backups.
+- **Uninstalling removes only the program.** Sessions it added to the desktop sidebar and everything in `~/.claude-desktop-sync/` stay. To revert those too, quit the desktop app and run `claude-session-sync --undo` repeatedly *before* uninstalling, until it reports nothing left to undo; then delete `~/.claude-desktop-sync/` if you no longer need the backups and saved account names.
 
 ---
 

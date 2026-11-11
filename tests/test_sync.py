@@ -444,3 +444,103 @@ def test_invalid_lang_is_rejected(capsys):
         cli.main(["--lang", "fr"])
     assert e.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- 账号名称、别名、前缀
+
+
+CLI_ACCT = {"account": ACCT, "org": ORG, "email": "alice@example.com", "org_name": "alice@example.com's Organization"}
+
+
+@pytest.mark.parametrize(
+    ("email", "masked"),
+    [("alice@example.com", "al***@example.com"), ("ab@x.io", "a***@x.io"), ("a@x.io", "a***@x.io")],
+)
+def test_mask_email(email, masked):
+    assert cli.mask_email(email) == masked
+
+
+def test_cli_login_account_reads_only_needed_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    (tmp_path / ".claude.json").write_text(
+        json.dumps(
+            {
+                "oauthAccount": {
+                    "accountUuid": ACCT,
+                    "organizationUuid": ORG,
+                    "emailAddress": "alice@example.com",
+                    "organizationName": "Acme",
+                    "billingType": "secret-ish",
+                }
+            }
+        )
+    )
+    assert cli.cli_login_account() == {"account": ACCT, "org": ORG, "email": "alice@example.com", "org_name": "Acme"}
+
+
+def test_heading_shows_masked_cli_account(env, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "cli_login_account", lambda: dict(CLI_ACCT))
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    env.run()
+    out = capsys.readouterr().out
+    assert "[al***@example.com · current CLI login] (aaaaaaaa…/bbbbbbbb…)" in out
+    assert "alice@example.com" not in out  # 完整邮箱不能出现，组织名里的也不行
+    assert "[aaaaaaaa…/bbbbbbbb…] existing 0" in out  # 另一个组织没有名称
+    assert not env.journal.exists()  # 预览不写账号记录
+
+
+def test_apply_remembers_cli_account(env, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "cli_login_account", lambda: dict(CLI_ACCT, org_name="Acme"))
+    env.add_index("existing")
+    env.run("--apply")
+    saved = json.loads((env.journal / "accounts.json").read_text())
+    assert saved["accounts"][f"{ACCT}/{ORG}"]["email"] == "alice@example.com"
+    # 之后切换到别的 CLI 账号，仍然能显示记下来的名称
+    monkeypatch.setattr(cli, "cli_login_account", lambda: None)
+    capsys.readouterr()
+    env.run()
+    assert "[Acme · al***@example.com] (aaaaaaaa…/bbbbbbbb…)" in capsys.readouterr().out
+
+
+def test_set_alias_and_remove(env, capsys):
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    env.run("--set-alias", "aaaaaaaa=work")  # 只写账号前缀：对该账号的所有组织生效
+    env.run("--set-alias", "aaaaaaaa/bbbbbbbb-0000-4000-8000-000000000002=side")  # 组织级别优先
+    capsys.readouterr()
+    env.run()
+    out = capsys.readouterr().out
+    assert "[work] (aaaaaaaa…/bbbbbbbb…) existing 1" in out
+    assert "[side] (aaaaaaaa…/bbbbbbbb…) existing 0" in out
+    env.run("--set-alias", "aaaaaaaa=")
+    saved = json.loads((env.journal / "accounts.json").read_text())
+    assert ACCT not in saved["aliases"] and f"{ACCT}/{ORG_EMPTY}" in saved["aliases"]
+
+
+def test_set_alias_errors(env):
+    env.add_index("existing")
+    with pytest.raises(SystemExit) as e:
+        env.run("--set-alias", "zzzz=x")
+    assert "No account matches" in str(e.value.code)
+    with pytest.raises(SystemExit) as e:
+        env.run("--set-alias", "aaaaaaaa")
+    assert "ID=NAME" in str(e.value.code)
+
+
+def test_account_prefix_filter(env):
+    other = "cccccccc-0000-4000-8000-000000000001"
+    env.add_index("existing")
+    env.add_index("existing", acct=other)
+    env.add_cli_session("new-1")
+    env.run("--apply", "--account", "cccccccc")
+    assert cli_ids(env.index_entries(other, ORG)) == ["existing", "new-1"]
+    assert cli_ids(env.index_entries(ACCT, ORG)) == ["existing"]
+
+
+def test_ambiguous_account_prefix_is_rejected(env):
+    env.add_index("existing")
+    env.add_index("existing", acct="aaaaaaaa-1111-4000-8000-000000000001")
+    with pytest.raises(SystemExit) as e:
+        env.run("--account", "aaaaaaaa")
+    assert "matches several accounts" in str(e.value.code)
