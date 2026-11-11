@@ -192,6 +192,8 @@ claude-session-sync --exclude-file ~/no-sync.txt --apply
 
 - **索引格式是根据现有文件推测的**：归档会识别 `isArchived`、`archived`、`archivedAt`、`status: "archived"` 和 `archived-sessions.idx`；删除会识别 `deleted_<会话ID>` 标记。桌面端更新后如果格式变了，需要修改 `is_archived()` 或 `load_markers()`。
 - **模板会原样复制原会话的大部分字段**（如 `envScopeId`、`postTurnSummary` 等）。借用其他账号的模板时，如果打开会话异常，先 `--undo`。
+- **Windows 和 Linux 的支持是实验性的**：开发和真实数据测试都在 macOS 上进行，Windows 和 Linux 只跑过自动化测试，桌面端目录和索引格式都没有在真机上验证过。欢迎附上脱敏后的 `--show-template` 输出反馈。
+- **Windows 上桌面端和原生安装的 CLI 都叫 `claude.exe`**，脚本按安装路径区分；分辨不出时只给出提醒、不会拒绝执行，请自己确认桌面端已经退出。
 - **Linux 上的运行检测只是尽力而为**：Linux 没有官方桌面端，脚本只按 `Claude`、`claude-desktop` 两个进程名检测，检测不到不代表没在运行，写入前请自己确认已经退出。
 - **不处理云端会话**：云端会话存在 claude.ai 上，跟本地文件无关。
 - **不要在 CLI 和桌面端同时打开同一个会话并同时输入**，可能会把记录写乱。先后切换着用没问题。

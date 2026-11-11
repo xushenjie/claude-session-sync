@@ -355,3 +355,23 @@ def test_windows_style_cwd_is_accepted(env):
     env.run("--apply")
     entry = next(e for e in env.index_entries() if e["cliSessionId"] == "win")
     assert entry["cwd"] == "C:\\work\\demo"
+
+
+@pytest.mark.parametrize(
+    ("paths", "expected"),
+    [
+        ([r"C:\Users\me\AppData\Local\AnthropicClaude\app-1.2.3\claude.exe"], True),
+        ([r"C:\Program Files\WindowsApps\Claude_1.2.3.0_x64__abc\app\claude.exe"], True),
+        ([r"C:\Users\me\.local\bin\claude.exe"], False),  # 原生安装的 CLI
+        ([r"C:\Users\me\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\claude.exe"], False),
+        ([r"C:\Users\me\.local\bin\claude.exe", r"C:\Users\me\AppData\Local\AnthropicClaude\claude.exe"], True),
+        ([], False),
+    ],
+)
+def test_windows_desktop_detection(paths, expected):
+    assert cli.windows_desktop_running(paths) is expected
+
+
+def test_windows_unknown_process_warns_but_does_not_block(capsys):
+    assert cli.windows_desktop_running(["", r"D:\tools\claude.exe"]) is False
+    assert "may or may not be the desktop app" in capsys.readouterr().err

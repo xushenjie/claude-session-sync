@@ -192,6 +192,8 @@ Undo only touches files the tool itself changed, never the desktop app's existin
 
 - **The index format is inferred from existing files.** Archived state is recognized from `isArchived`, `archived`, `archivedAt`, `status: "archived"`, and `archived-sessions.idx`; deletions from `deleted_<session-id>` markers. If a desktop update changes the format, `is_archived()` or `load_markers()` need updating.
 - **Templates copy most fields from the original session as-is** (e.g. `envScopeId`, `postTurnSummary`). If a session misbehaves after borrowing a template from another account, run `--undo` first.
+- **Windows and Linux support is experimental.** Development and real-data testing happen on macOS; on Windows and Linux only the automated tests have run, so the desktop data paths and index format there are unverified. Reports (with redacted `--show-template` output) are very welcome.
+- **On Windows, the desktop app and a natively installed CLI are both `claude.exe`**, so the tool tells them apart by install path. If it can't tell, it prints a warning instead of refusing — make sure the desktop app is quit yourself.
 - **Running-app detection on Linux is best effort.** There is no official Linux desktop app; the tool only looks for processes named `Claude` or `claude-desktop`. Make sure the app is closed yourself.
 - **Cloud sessions are not handled.** They live on claude.ai, not in local files.
 - **Don't type into the same session from the CLI and the desktop app at the same time**, or the transcript may get interleaved. Switching back and forth is fine.

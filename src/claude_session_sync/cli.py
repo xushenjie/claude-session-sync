@@ -340,6 +340,52 @@ def build_entry(template, s):
 LINUX_PROCESS_NAMES = ("Claude", "claude-desktop")
 
 
+# Windows 上桌面端和原生安装的 CLI 都叫 claude.exe，只能按可执行文件路径区分。
+# 以下规则来自常见安装位置，尚未在所有安装方式上验证。
+WINDOWS_DESKTOP_HINTS = ("\\anthropicclaude\\", "\\windowsapps\\claude_", "\\programs\\claude\\", "\\claude-3p\\")
+WINDOWS_CLI_HINTS = ("\\.local\\bin\\", "\\npm\\", "\\node_modules\\", "\\.claude\\", "\\scoop\\", "\\winget\\")
+
+
+def windows_claude_exe_paths():
+    """返回所有 claude.exe 进程的路径；拿不到路径（如权限不足）的进程记为空字符串。"""
+    r = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-Process -Name claude -ErrorAction SilentlyContinue | ForEach-Object { '' + $_.Path }",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    return [ln.strip() for ln in r.stdout.splitlines()]
+
+
+def windows_desktop_running(paths):
+    """根据 claude.exe 的路径判断桌面端是否在运行。
+    明确是桌面端 → True；明确是 CLI → 忽略；分辨不出 → 打印提醒但不阻止（返回 False）。"""
+    unknown = []
+    for p in paths:
+        low = p.lower()
+        if any(h in low for h in WINDOWS_DESKTOP_HINTS):
+            return True
+        if low and any(h in low for h in WINDOWS_CLI_HINTS):
+            continue
+        unknown.append(p or "?")
+    if unknown:
+        print(
+            t(
+                "  ! Found claude.exe process(es) that may or may not be the desktop app: "
+                f"{', '.join(unknown)}. Make sure the desktop app is fully quit.",
+                f"  ! 发现无法判断是否为桌面端的 claude.exe 进程：{', '.join(unknown)}。请自行确认桌面端已彻底退出。",
+            ),
+            file=sys.stderr,
+        )
+    return False
+
+
 def desktop_running():
     sysname = platform.system()
     try:
@@ -347,8 +393,7 @@ def desktop_running():
             r = subprocess.run(["pgrep", "-x", "Claude"], capture_output=True)
             return r.returncode == 0
         if sysname == "Windows":
-            r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq claude.exe"], capture_output=True, text=True)
-            return "claude.exe" in r.stdout.lower()
+            return windows_desktop_running(windows_claude_exe_paths())
         for name in LINUX_PROCESS_NAMES:
             if subprocess.run(["pgrep", "-x", name], capture_output=True).returncode == 0:
                 return True

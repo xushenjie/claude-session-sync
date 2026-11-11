@@ -4,6 +4,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Windows: a running Claude Code CLI (`claude.exe`) was mistaken for the desktop app, blocking `--apply` and `--undo`. Processes are now told apart by install path; unknown ones only trigger a warning.
+
 ## [0.1.0] - 2026-11-11
 
 ### Added
