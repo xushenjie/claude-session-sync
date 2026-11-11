@@ -303,7 +303,7 @@ claude --desktop --resume <会话ID>
 
 ## 参与贡献
 
-欢迎提 issue 和 PR，中英文都可以。开发环境、测试、提交规范和发版流程见 [CONTRIBUTING.md](CONTRIBUTING.md)；可能导致数据丢失或泄露的问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+欢迎提 issue 和 PR，中英文都可以。版本变化见[更新日志](CHANGELOG.zh-CN.md)；开发环境、测试、提交规范和发版流程见 [CONTRIBUTING.md](CONTRIBUTING.md)；可能导致数据丢失或泄露的问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
 ## 许可证
 

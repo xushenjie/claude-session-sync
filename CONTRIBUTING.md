@@ -27,19 +27,19 @@ The `dev` dependency group in `pyproject.toml` pins the ruff version used by CI.
 ## Commits and pull requests
 
 - Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `test:`, `ci:`, `chore:` …
-- Add a line under `## [Unreleased]` in `CHANGELOG.md` for user-visible changes.
+- Add a line under `## [Unreleased]` in `CHANGELOG.md` for user-visible changes, and the same line in Chinese in `CHANGELOG.zh-CN.md` (maintainers can translate it if you don't write Chinese).
 - Make sure `uv run pytest` and `uv run ruff check . && uv run ruff format --check .` pass.
 
 ## Releasing (maintainers)
 
 1. Bump `__version__` in `src/claude_session_sync/cli.py`.
-2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD`, add a fresh `## [Unreleased]`, and update the compare links at the bottom.
+2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD`, add a fresh `## [Unreleased]`, and update the compare links at the bottom. Do the same in `CHANGELOG.zh-CN.md`; CI fails if the version headings of the two files differ.
 3. Commit, then tag and push:
 
    ```bash
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
 
-The `Release` workflow checks that the tag matches `__version__` and that the changelog has an entry, builds the package, publishes it to PyPI, and creates a GitHub Release with the changelog section as notes. It runs without manual approval: pushing the tag is the release decision, so double-check the version before tagging — a version published to PyPI can never be reused.
+The `Release` workflow checks that the tag matches `__version__` and that both changelogs have an entry, builds the package, publishes it to PyPI, and creates a GitHub Release with the changelog section as notes. It runs without manual approval: pushing the tag is the release decision, so double-check the version before tagging — a version published to PyPI can never be reused.
 
 One-time setup before the first release: on PyPI, add a [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/) for the `claude-session-sync-cli` project and this repository with workflow `release.yml` and environment `pypi`, and create an environment named `pypi` under the repository's Settings → Environments, limited to tags matching `v*` (no required reviewers). If more people get write access later, add required reviewers there or a tag ruleset so only maintainers can create `v*` tags.

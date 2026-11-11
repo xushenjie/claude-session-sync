@@ -24,7 +24,9 @@ jobs:
             exit 1
           fi
       - name: Check CHANGELOG has an entry
-        run: grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md
+        run: |
+          grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md
+          grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.zh-CN.md
       - run: uv build
       - run: uvx twine check --strict dist/*
       - uses: actions/upload-artifact@v7

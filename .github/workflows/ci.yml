@@ -21,6 +21,9 @@ jobs:
       # ruff 版本锁定在 pyproject.toml 的 dev 依赖组里
       - run: uv run --only-group dev ruff check .
       - run: uv run --only-group dev ruff format --check .
+      # 中英文更新日志的版本标题必须一一对应
+      - name: Check CHANGELOG translations are in sync
+        run: diff <(grep -o '^## \[[^]]*\]' CHANGELOG.md) <(grep -o '^## \[[^]]*\]' CHANGELOG.zh-CN.md)
 
   test:
     strategy:
