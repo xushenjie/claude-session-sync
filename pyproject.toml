@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "claude-session-sync"
+name = "claude-session-sync-cli"
 dynamic = ["version"]
 description = "Sync local Claude Code CLI sessions into the Claude desktop app sidebar (unofficial)."
 readme = "README.md"

@@ -43,14 +43,16 @@ CLI 和桌面端的本地会话共用同一份对话记录，但**会话列表�
 需要 Python 3.9 或更高版本（macOS 自带的 `python3` 就可以），只用标准库，没有第三方依赖。
 
 ```bash
-uv tool install git+https://github.com/xushenjie/claude-session-sync
+uv tool install claude-session-sync-cli
 ```
 
 或者用 pipx：
 
 ```bash
-pipx install git+https://github.com/xushenjie/claude-session-sync
+pipx install claude-session-sync-cli
 ```
+
+PyPI 上的包名是 `claude-session-sync-cli`，安装后的命令是 `claude-session-sync`。想安装还没发版的最新代码，用 `uv tool install git+https://github.com/xushenjie/claude-session-sync`。
 
 不想安装的话，也可以直接下载单个文件运行，下文的 `claude-session-sync` 换成 `python3 cli.py` 即可：
 

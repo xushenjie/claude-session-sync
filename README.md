@@ -43,14 +43,16 @@ This tool adds the missing index files for **every account/org** so CLI sessions
 Requires Python 3.9+ (the `python3` that ships with macOS works). Standard library only, no dependencies.
 
 ```bash
-uv tool install git+https://github.com/xushenjie/claude-session-sync
+uv tool install claude-session-sync-cli
 ```
 
 Or with pipx:
 
 ```bash
-pipx install git+https://github.com/xushenjie/claude-session-sync
+pipx install claude-session-sync-cli
 ```
+
+The PyPI package is named `claude-session-sync-cli`; the command it installs is `claude-session-sync`. To install the latest unreleased code instead, use `uv tool install git+https://github.com/xushenjie/claude-session-sync`.
 
 Or skip installing and run the single file directly — replace `claude-session-sync` below with `python3 cli.py`:
 
