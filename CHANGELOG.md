@@ -4,11 +4,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-11
+
 ### Added
 - `--include-recent`: also sync sessions written in the last 2 minutes instead of skipping them. Such sessions are marked in the output, and `--purge-archived` still never touches them.
-
-### Fixed
-- Windows: a running Claude Code CLI (`claude.exe`) was mistaken for the desktop app, blocking `--apply` and `--undo`. Processes are now told apart by install path; unknown ones only trigger a warning.
 
 ## [0.1.0] - 2026-11-11
 
@@ -18,9 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Borrow a template from another account when an account has no sessions yet.
 - `--purge-archived`: permanently delete archived sessions after syncing, moving files to a backup folder first. Respects `--exclude`, `--exclude-file`, and `--project`, and skips sessions whose transcript was written in the last 2 minutes.
 - `--undo`: revert the most recent write or deletion, including restoring backups.
-- Refuse `--apply` and `--undo` while the desktop app is running (macOS, Windows, best effort on Linux) unless `--force` is given.
+- Refuse `--apply` and `--undo` while the desktop app is running unless `--force` is given. On Windows, where the desktop app and the Claude Code CLI are both `claude.exe`, they are told apart by install path and unknown processes only trigger a warning; detection on Linux is best effort.
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/xushenjie/claude-session-sync/releases/tag/v0.1.0
