@@ -190,6 +190,23 @@ claude-session-sync --exclude-file ~/no-sync.txt --apply
 
 ---
 
+## 升级与卸载
+
+用安装时的工具，配合**包名** `claude-session-sync-cli`（不是命令名）：
+
+| 安装方式 | 升级 | 卸载 |
+|---|---|---|
+| uv | `uv tool upgrade claude-session-sync-cli` | `uv tool uninstall claude-session-sync-cli` |
+| pipx | `pipx upgrade claude-session-sync-cli` | `pipx uninstall claude-session-sync-cli` |
+| 单文件 | 重新运行[安装](#安装)一节里的 `curl` 命令 | 删除 `cli.py` |
+
+不记得用哪种方式装的，运行 `uv tool list` 或 `pipx list` 看一下。
+
+- **升级**会直接替换旧版本，命令名不变。再运行一次 `uv tool install` 不会升级，要用 `upgrade`。`~/.claude-desktop-sync/` 里的日志和备份会保留，升级后 `--undo` 依然可以撤销以前的操作。升级完可以用 `claude-session-sync --version` 确认版本。
+- **卸载只删除程序本身。** 已经同步到桌面端侧边栏的会话和 `~/.claude-desktop-sync/` 都会保留。想一并撤销，请在**卸载前**退出桌面端，反复运行 `claude-session-sync --undo`，直到提示没有可撤销的记录；不再需要备份的话，再手动删除 `~/.claude-desktop-sync/`。
+
+---
+
 ## 已知限制
 
 - **索引格式是根据现有文件推测的**：归档会识别 `isArchived`、`archived`、`archivedAt`、`status: "archived"` 和 `archived-sessions.idx`；删除会识别 `deleted_<会话ID>` 标记。桌面端更新后如果格式变了，需要修改 `is_archived()` 或 `load_markers()`。

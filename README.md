@@ -190,6 +190,23 @@ Undo only touches files the tool itself changed, never the desktop app's existin
 
 ---
 
+## Upgrade and uninstall
+
+Use the package name `claude-session-sync-cli` (not the command name) with your installer:
+
+| Installed with | Upgrade | Uninstall |
+|---|---|---|
+| uv | `uv tool upgrade claude-session-sync-cli` | `uv tool uninstall claude-session-sync-cli` |
+| pipx | `pipx upgrade claude-session-sync-cli` | `pipx uninstall claude-session-sync-cli` |
+| single file | re-run the `curl` command from [Install](#install) | delete `cli.py` |
+
+Not sure which one you used? `uv tool list` or `pipx list` will show it.
+
+- **Upgrading** replaces the old version in place; the command name stays the same. Running `uv tool install` again does not upgrade — use `upgrade`. Journals and backups in `~/.claude-desktop-sync/` are kept, so `--undo` still works across upgrades. Run `claude-session-sync --version` to confirm.
+- **Uninstalling removes only the program.** Sessions it added to the desktop sidebar and everything in `~/.claude-desktop-sync/` stay. To revert those too, quit the desktop app and run `claude-session-sync --undo` repeatedly *before* uninstalling, until it reports nothing left to undo; then delete `~/.claude-desktop-sync/` if you no longer need the backups.
+
+---
+
 ## Known limitations
 
 - **The index format is inferred from existing files.** Archived state is recognized from `isArchived`, `archived`, `archivedAt`, `status: "archived"`, and `archived-sessions.idx`; deletions from `deleted_<session-id>` markers. If a desktop update changes the format, `is_archived()` or `load_markers()` need updating.
