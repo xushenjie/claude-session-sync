@@ -4,6 +4,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-11
+
 ### Fixed
 - On Windows, working directories recorded with forward slashes are now shortened to `~` as well.
 
@@ -53,7 +55,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.2...v0.1.3
