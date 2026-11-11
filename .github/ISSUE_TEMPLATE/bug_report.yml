@@ -1,0 +1,44 @@
+name: Bug report
+description: Wrong sync result, desktop app can't open a session, a crash, etc. (中文也可以)
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **Redact before pasting.** Preview output and `--show-template` contain local paths, project names
+        and session titles — replace them with placeholders like `/path/to/project` and `<title>`.
+        Never paste `.jsonl` transcript contents.
+
+        If the bug could delete or leak data, please report it privately instead:
+        [Security Advisories](https://github.com/xushenjie/claude-session-sync/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: claude-session-sync version
+      description: Output of `claude-session-sync --version`
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Claude desktop app version and OS
+      placeholder: e.g. Claude 1.2.3 / macOS 15.1
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output (redacted)
+      render: text
+  - type: textarea
+    id: template
+    attributes:
+      label: Field names from --show-template (optional, redacted)
+      description: Field names and value types are enough; this helps when the desktop index format changes.
+      render: json

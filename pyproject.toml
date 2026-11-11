@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-session-sync"
+dynamic = ["version"]
+description = "Sync local Claude Code CLI sessions into the Claude desktop app sidebar (unofficial)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "xushenjie" }]
+keywords = ["claude", "claude-code", "cli", "sessions", "sync"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Utilities",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/xushenjie/claude-session-sync"
+Issues = "https://github.com/xushenjie/claude-session-sync/issues"
+Changelog = "https://github.com/xushenjie/claude-session-sync/blob/main/CHANGELOG.md"
+
+[project.scripts]
+claude-session-sync = "claude_session_sync.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff==0.17.4"]
+
+[tool.hatch.version]
+path = "src/claude_session_sync/cli.py"
+
+[tool.hatch.build.targets.sdist]
+exclude = [".github"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_session_sync"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP"]
+ignore = ["E501"]

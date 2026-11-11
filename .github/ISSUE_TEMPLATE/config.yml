@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security issue privately
+    url: https://github.com/xushenjie/claude-session-sync/security/advisories/new
+    about: Bugs that could delete, corrupt, or leak local data
