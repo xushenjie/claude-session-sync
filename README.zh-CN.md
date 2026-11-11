@@ -97,7 +97,7 @@ claude-session-sync --undo
 
 > 如果提示"检测到桌面端正在运行"，说明桌面端还挂在菜单栏或托盘里，**这次什么都没有写入**。彻底退出后重新运行即可。
 
-系统语言（`LC_ALL`、`LC_MESSAGES`、`LANG`，或 Windows 的显示语言）是中文时输出中文，否则输出英文。可以用 `CLAUDE_SESSION_SYNC_LANG=zh` 或 `en` 强制指定。
+系统语言（`LC_ALL`、`LC_MESSAGES`、`LANG`，或 Windows 的显示语言）是中文时输出中文，否则输出英文。临时切换加 `--lang zh` 或 `--lang en`；想长期使用中文，又不想改系统语言，在 shell 配置文件（如 `~/.zshrc`）里加上 `export CLAUDE_SESSION_SYNC_LANG=zh`。
 
 ---
 
@@ -149,6 +149,7 @@ claude-session-sync --purge-archived --apply   # 执行
 |---|---|
 | `-h`, `--help` | 显示帮助、示例和注意事项 |
 | `-V`, `--version` | 显示版本号 |
+| `--lang en\|zh` | 输出语言，优先于 `CLAUDE_SESSION_SYNC_LANG` 和系统语言 |
 | （不加参数） | 预览模式 |
 | `--apply` | 实际写入 |
 | `--undo` | 撤销最近一次写入或删除 |

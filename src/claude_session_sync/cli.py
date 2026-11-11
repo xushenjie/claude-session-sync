@@ -40,7 +40,7 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 HOME = Path.home()
 JOURNAL_DIR = HOME / ".claude-desktop-sync"
@@ -581,17 +581,32 @@ def purge_archived(indexes, archived_ids, projects, apply, trash, excluded=(), p
 # ---------------------------------------------------------------- 主流程
 
 
+def apply_lang_flag(argv):
+    """在构建帮助文本之前先读取 --lang，让 --help 和后续输出都使用指定语言。
+    非法取值交给正式的解析器报错。"""
+    global _LANG_ZH
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--lang")
+    known, _ = pre.parse_known_args(argv)
+    if known.lang in ("en", "zh"):
+        _LANG_ZH = known.lang == "zh"
+
+
 def main(argv=None):
     use_safe_stdio()
+    apply_lang_flag(argv)
     ap = argparse.ArgumentParser(
         prog="claude-session-sync",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=t(
             "Sync local Claude Code CLI sessions into the Claude desktop app's Code sidebar (multi-account).\n"
             "Archived sessions and sessions deleted in the desktop app are skipped. "
-            "Previews by default; pass --apply to write.",
+            "Previews by default; pass --apply to write.\n"
+            # 这一行固定用中文：给终端设成英文的中文用户看
+            "中文输出：加 --lang zh，或设置环境变量 CLAUDE_SESSION_SYNC_LANG=zh",
             "把本地 Claude Code CLI 会话同步到 Claude 桌面端 Code 标签页的侧边栏（支持多账号）。\n"
-            "自动排除已归档、桌面端已删除的会话。默认只预览，加 --apply 才写入。",
+            "自动排除已归档、桌面端已删除的会话。默认只预览，加 --apply 才写入。\n"
+            "English output: pass --lang en, or set CLAUDE_SESSION_SYNC_LANG=en",
         ),
         epilog=t(
             """\
@@ -612,7 +627,7 @@ Notes:
   * Quit the desktop app completely before writing, and reopen it afterwards.
   * Journals and backups live in ~/.claude-desktop-sync/; --undo steps back one run at a time.
   * The desktop index format is undocumented and may break with desktop updates.
-  * Output language follows LANG; set CLAUDE_SESSION_SYNC_LANG=en or zh to override.
+  * Output language: --lang, then CLAUDE_SESSION_SYNC_LANG, then LC_ALL / LC_MESSAGES / LANG.
 """,
             """\
 常用流程：
@@ -632,11 +647,19 @@ Notes:
   * 写入前请彻底退出桌面端（菜单栏 ⌘Q），写完重新打开。
   * 日志与备份在 ~/.claude-desktop-sync/，--undo 按时间倒序逐次撤销。
   * 桌面端索引格式无官方文档，桌面端更新后可能失效。
-  * 输出语言跟随 LANG，可用 CLAUDE_SESSION_SYNC_LANG=en 或 zh 强制指定。
+  * 输出语言：依次看 --lang、CLAUDE_SESSION_SYNC_LANG、LC_ALL / LC_MESSAGES / LANG。
 """,
         ),
     )
     ap.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
+    ap.add_argument(
+        "--lang",
+        choices=["en", "zh"],
+        help=t(
+            "output language (default: from CLAUDE_SESSION_SYNC_LANG or the locale)",
+            "输出语言（默认：按 CLAUDE_SESSION_SYNC_LANG 或系统语言）",
+        ),
+    )
     ap.add_argument(
         "--apply", action="store_true", help=t("actually write (default: preview only)", "实际写入（默认只预览）")
     )

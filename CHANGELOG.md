@@ -4,6 +4,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-11
+
+### Added
+- `--lang en|zh` to pick the output language for a single run; it overrides `CLAUDE_SESSION_SYNC_LANG` and the locale.
+- The English `--help` now shows a one-line hint in Chinese on how to switch, and the Chinese `--help` shows the English equivalent.
+
 ## [0.1.2] - 2026-11-11
 
 ### Fixed
@@ -26,7 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/xushenjie/claude-session-sync/releases/tag/v0.1.0

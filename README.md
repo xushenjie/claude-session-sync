@@ -97,7 +97,7 @@ claude-session-sync --undo
 
 > If it says the desktop app is running, the app is still alive in the menu bar or system tray and **nothing was written**. Quit it fully and run again.
 
-Output is in English, or in Chinese when your locale (`LC_ALL` / `LC_MESSAGES` / `LANG`, or the Windows display language) is Chinese. Set `CLAUDE_SESSION_SYNC_LANG=en` or `zh` to override.
+Output is in English, or in Chinese when your locale (`LC_ALL` / `LC_MESSAGES` / `LANG`, or the Windows display language) is Chinese. Pass `--lang en` or `--lang zh` for a single run, or set `CLAUDE_SESSION_SYNC_LANG=en` or `zh` in your shell profile to change it for good without touching your locale.
 
 ---
 
@@ -149,6 +149,7 @@ claude-session-sync --purge-archived --apply   # do it
 |---|---|
 | `-h`, `--help` | Show help, examples, and caveats |
 | `-V`, `--version` | Show the version |
+| `--lang en\|zh` | Output language; overrides `CLAUDE_SESSION_SYNC_LANG` and the locale |
 | (no options) | Preview mode |
 | `--apply` | Actually write |
 | `--undo` | Undo the most recent write or deletion |

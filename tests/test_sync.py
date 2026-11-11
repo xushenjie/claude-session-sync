@@ -411,3 +411,36 @@ def test_include_recent_does_not_affect_purge(env):
     jsonl = env.add_cli_session("busy", mtime=time.time())
     env.run("--purge-archived", "--apply", "--include-recent")
     assert arch.exists() and jsonl.exists()
+
+
+# ---------------------------------------------------------------- --lang
+
+
+def test_lang_flag_switches_help_to_chinese(monkeypatch, capsys):
+    monkeypatch.setenv("CLAUDE_SESSION_SYNC_LANG", "en")  # --lang 优先于环境变量
+    with pytest.raises(SystemExit):
+        cli.main(["--lang", "zh", "--help"])
+    out = capsys.readouterr().out
+    assert "实际写入" in out and "English output: pass --lang en" in out
+
+
+def test_english_help_shows_chinese_hint(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = capsys.readouterr().out
+    assert "actually write" in out
+    assert "中文输出：加 --lang zh" in out
+
+
+def test_lang_flag_switches_run_output(env, capsys):
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run("--lang=zh")
+    assert "预览模式" in capsys.readouterr().out
+
+
+def test_invalid_lang_is_rejected(capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--lang", "fr"])
+    assert e.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
