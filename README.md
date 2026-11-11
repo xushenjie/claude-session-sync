@@ -109,7 +109,7 @@ Output is in English, or in Chinese when your locale (`LC_ALL` / `LC_MESSAGES` /
 | The session is archived in **any** account (`isArchived` field or `archived-sessions.idx`) | Not added to any account. Use `--per-account-archive` to only consider each account's own archive state |
 | The session was deleted in the desktop app in any account (`deleted_<session-id>` marker) | Not added to any account |
 | The session is listed via `--exclude` or `--exclude-file` | Not added |
-| The transcript was written within the last 2 minutes (probably still running) | Skipped |
+| The transcript was written within the last 2 minutes (probably still running) | Skipped; pass `--include-recent` to sync it anyway |
 | Empty sessions (no user message) or transcripts without a working directory | Skipped |
 | `.jsonl` files in subfolders of a project directory (subagents etc.) | Not scanned |
 
@@ -138,7 +138,7 @@ claude-session-sync --purge-archived --apply   # do it
 - Nothing is erased outright: files are moved to `~/.claude-desktop-sync/trash-<timestamp>/`, and `--undo` restores everything;
 - purging always covers **all accounts**, even with `--account`, so no account is left with an index pointing to a removed transcript;
 - `--exclude`, `--exclude-file`, and `--project` apply to purging too — excluded sessions are never deleted;
-- sessions whose `.jsonl` was modified in the last 2 minutes are skipped;
+- sessions whose `.jsonl` was modified in the last 2 minutes are always skipped, even with `--include-recent`;
 - backups are not cleaned up automatically; once you're happy, delete `~/.claude-desktop-sync/trash-*` yourself.
 
 ---
@@ -157,6 +157,7 @@ claude-session-sync --purge-archived --apply   # do it
 | `--project <string>` | Only handle sessions whose working directory contains this string (sync and purge) |
 | `--exclude <session-id>` | Exclude a session from sync and purge; repeatable |
 | `--exclude-file <file>` | Read excluded session IDs from a file, one per line |
+| `--include-recent` | Also sync sessions written in the last 2 minutes (possibly still running). They are marked in the output; purging still skips them |
 | `--per-account-archive` | Only exclude sessions archived in the same account |
 | `--purge-archived` | Permanently delete archived sessions after syncing (see above) |
 | `--projects-dir <path>` | CLI sessions directory; defaults to `~/.claude/projects` and honors `CLAUDE_CONFIG_DIR` |

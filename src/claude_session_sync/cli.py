@@ -669,6 +669,15 @@ Notes:
         help=t("file with session IDs to exclude, one per line", "排除列表文件，每行一个会话ID"),
     )
     ap.add_argument(
+        "--include-recent",
+        action="store_true",
+        help=t(
+            "also sync sessions written in the last 2 minutes (possibly still running); "
+            "--purge-archived still skips them",
+            "同步时不跳过最近 2 分钟内仍在写入的会话（可能正在运行）；--purge-archived 仍然会跳过",
+        ),
+    )
+    ap.add_argument(
         "--per-account-archive",
         action="store_true",
         help=t(
@@ -792,7 +801,9 @@ Notes:
     if args.project:
         sessions = [s for s in sessions if args.project in s["cwd"]]
     now = time.time()
-    running = {s["id"] for s in sessions if now - s["mtime"] < RUNNING_GRACE_SEC}
+    recent = {s["id"] for s in sessions if now - s["mtime"] < RUNNING_GRACE_SEC}
+    skip_recent = set() if args.include_recent else recent
+    included_recent = set()
 
     print(
         t(
@@ -819,7 +830,7 @@ Notes:
         todo = [
             s
             for s in sessions
-            if s["id"] not in known and s["id"] not in arch and s["id"] not in excluded and s["id"] not in running
+            if s["id"] not in known and s["id"] not in arch and s["id"] not in excluded and s["id"] not in skip_recent
         ]
         print(
             t(
@@ -847,7 +858,11 @@ Notes:
             continue
         for s in sorted(todo, key=lambda x: -x["lastActivityAt"]):
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["lastActivityAt"] / 1000))
-            print(f"  + {when}  {s['title']}  ({s['cwd']})")
+            mark = ""
+            if s["id"] in recent:
+                included_recent.add(s["id"])
+                mark = t("  [still being written]", "  （最近仍在写入）")
+            print(f"  + {when}  {s['title']}  ({s['cwd']}){mark}")
             if args.apply:
                 new_id, entry = build_entry(template, s)
                 out = d / f"{new_id}.json"
@@ -855,11 +870,23 @@ Notes:
                     json.dump(entry, fh, ensure_ascii=False, indent=2)
                 created.append(out)
 
-    if running:
+    if skip_recent:
         print(
             t(
-                f"\nSkipped {len(running)} session(s) written in the last 2 minutes (probably still running).",
-                f"\n跳过 {len(running)} 个最近 2 分钟内仍在写入的会话（可能正在运行）。",
+                f"\nSkipped {len(skip_recent)} session(s) written in the last 2 minutes (probably still running). "
+                "Pass --include-recent to sync them anyway.",
+                f"\n跳过 {len(skip_recent)} 个最近 2 分钟内仍在写入的会话（可能正在运行）。"
+                "如需一并同步，加 --include-recent。",
+            )
+        )
+    if included_recent:
+        print(
+            t(
+                f"\n! Included {len(included_recent)} session(s) still being written. Their title and last-activity "
+                "time may be out of date, and don't type into the same session from the CLI and the desktop app "
+                "at the same time.",
+                f"\n! 包含了 {len(included_recent)} 个最近仍在写入的会话。它们的标题和最后活动时间可能不是最新的，"
+                "也不要在 CLI 和桌面端同时向同一个会话输入。",
             )
         )
 

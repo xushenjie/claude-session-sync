@@ -109,7 +109,7 @@ claude-session-sync --undo
 | 会话在**任意一个账号**里被归档过（`isArchived` 字段或 `archived-sessions.idx`） | 所有账号都不补。加 `--per-account-archive` 改为只看当前账号 |
 | 会话在任意账号里被桌面端删除过（存在 `deleted_<会话ID>` 标记） | 所有账号都不补 |
 | 会话在 `--exclude` 或 `--exclude-file` 里 | 不补 |
-| 最近 2 分钟内还在写入的会话（可能正在运行） | 跳过 |
+| 最近 2 分钟内还在写入的会话（可能正在运行） | 跳过；加 `--include-recent` 可以照样同步 |
 | 空会话（没有用户消息）、找不到工作目录的记录 | 跳过 |
 | 项目目录下子文件夹里的 `.jsonl`（子代理等） | 不扫描 |
 
@@ -138,7 +138,7 @@ claude-session-sync --purge-archived --apply   # 执行
 - 被删的文件不会直接抹掉，而是移到 `~/.claude-desktop-sync/trash-<时间>/`，`--undo` 可以全部还原；
 - 不管有没有加 `--account`，清除都会覆盖**全部账号**，避免别的账号留下指向已删文件的索引；
 - `--exclude`、`--exclude-file` 和 `--project` 对清除同样生效，排除的会话不会被删；
-- 最近 2 分钟内还在写入的会话会跳过（按 `.jsonl` 的修改时间判断）；
+- 最近 2 分钟内还在写入的会话一定会跳过（按 `.jsonl` 的修改时间判断），加了 `--include-recent` 也一样；
 - 备份目录不会自动清理，确认没问题后可以手动删除 `~/.claude-desktop-sync/trash-*`。
 
 ---
@@ -157,6 +157,7 @@ claude-session-sync --purge-archived --apply   # 执行
 | `--project <字符串>` | 只处理工作目录里包含这个字符串的会话（同步和清除都生效） |
 | `--exclude <会话ID>` | 排除某个会话，同步和清除都跳过，可以写多次 |
 | `--exclude-file <文件>` | 从文件读取排除列表，每行一个会话 ID |
+| `--include-recent` | 同步时不跳过最近 2 分钟内仍在写入的会话（可能正在运行），输出里会单独标出；清除时仍然跳过 |
 | `--per-account-archive` | 只按当前账号的归档状态来排除 |
 | `--purge-archived` | 同步后彻底删除已归档会话（见上一节） |
 | `--projects-dir <路径>` | CLI 会话目录，默认 `~/.claude/projects`，也会读取 `CLAUDE_CONFIG_DIR` |

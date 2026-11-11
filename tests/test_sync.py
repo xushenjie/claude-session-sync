@@ -375,3 +375,39 @@ def test_windows_desktop_detection(paths, expected):
 def test_windows_unknown_process_warns_but_does_not_block(capsys):
     assert cli.windows_desktop_running(["", r"D:\tools\claude.exe"]) is False
     assert "may or may not be the desktop app" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- --include-recent
+
+
+def test_recent_session_skipped_with_hint(env, capsys):
+    import time
+
+    env.add_index("existing")
+    env.add_cli_session("busy", mtime=time.time())
+    env.run("--apply")
+    assert cli_ids(env.index_entries()) == ["existing"]
+    assert "--include-recent" in capsys.readouterr().out
+
+
+def test_include_recent_syncs_and_warns(env, capsys):
+    import time
+
+    env.add_index("existing")
+    env.add_cli_session("busy", mtime=time.time())
+    env.add_cli_session("old")
+    env.run("--apply", "--include-recent")
+    assert cli_ids(env.index_entries()) == ["busy", "existing", "old"]
+    out = capsys.readouterr().out
+    assert out.count("[still being written]") == 1  # 只标注最近写入的那个
+    assert "Included 1 session(s) still being written" in out
+    assert "Skipped" not in out
+
+
+def test_include_recent_does_not_affect_purge(env):
+    import time
+
+    arch = env.add_index("busy", archived=True)
+    jsonl = env.add_cli_session("busy", mtime=time.time())
+    env.run("--purge-archived", "--apply", "--include-recent")
+    assert arch.exists() and jsonl.exists()

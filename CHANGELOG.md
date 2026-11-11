@@ -4,6 +4,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `--include-recent`: also sync sessions written in the last 2 minutes instead of skipping them. Such sessions are marked in the output, and `--purge-archived` still never touches them.
+
 ### Fixed
 - Windows: a running Claude Code CLI (`claude.exe`) was mistaken for the desktop app, blocking `--apply` and `--undo`. Processes are now told apart by install path; unknown ones only trigger a warning.
 
