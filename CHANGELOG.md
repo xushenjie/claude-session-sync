@@ -4,6 +4,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
+### Added
+- In a terminal, the preview ends with "Write now? [y/N]", so you can write without running again. While the desktop app is running it waits for you to quit it instead of exiting. Scripts, pipes, and CI are never asked; `--no-input` turns prompts off in a terminal too.
+- `-i` / `--interactive`: pick accounts and sessions from numbered lists (`1-5,8`, `!3`, `none`). Sessions left out can be remembered in `~/.claude-desktop-sync/exclude.txt`, which is read on every run.
+- `-q` / `--quiet`, `-v` / `--verbose`, `--json`, and `--color auto|always|never` (honors `NO_COLOR`).
+- In a terminal, `--purge-archived` only deletes after you type `yes`, and `--undo` asks first.
+
+### Changed
+- The output lists each session once, with the accounts it goes to, instead of once per account; long lists are capped at 20 unless `-v` is given. Colors and symbols are used in terminals, with an ASCII fallback, and titles and paths are fitted to the terminal width.
+- Exclude files accept `#` comments, and a missing `--exclude-file` is reported clearly.
+
 ## [0.2.0] - 2026-11-11
 
 ### Added
@@ -38,7 +50,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.1.1...v0.1.2

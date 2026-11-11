@@ -38,10 +38,11 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 HOME = Path.home()
 JOURNAL_DIR = HOME / ".claude-desktop-sync"
@@ -81,6 +82,205 @@ def t(en, zh):
     if _LANG_ZH is None:
         _LANG_ZH = _detect_zh()
     return zh if _LANG_ZH else en
+
+
+# ---------------------------------------------------------------- 终端输出与交互
+#
+# 只用标准库：ANSI 颜色只在终端里启用（遵循 NO_COLOR 和 --color），
+# 终端编码不支持时符号退回 ASCII；交互全部基于 input()，管道和脚本里不会提问。
+
+_COLOR = False
+_UNICODE = True
+_input = input  # 测试里替换成假的输入
+
+ANSI = {"bold": "1", "dim": "2", "red": "31", "green": "32", "yellow": "33", "cyan": "36"}
+SYMBOLS = {
+    "ok": ("✓", "OK"),
+    "warn": ("⚠", "!"),
+    "err": ("✗", "x"),
+    "add": ("+", "+"),
+    "del": ("-", "-"),
+    "arrow": ("→", "->"),
+    "dot": ("●", "*"),
+    "ell": ("…", "..."),
+}
+
+
+def _enable_windows_ansi():
+    """Windows 10+ 的控制台需要打开 VT 模式才能显示 ANSI 颜色；失败就不用颜色。"""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def setup_terminal(color="auto"):
+    global _COLOR, _UNICODE
+    enc = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        "".join(u for u, _ in SYMBOLS.values()).encode(enc)
+        _UNICODE = True
+    except (LookupError, UnicodeEncodeError):
+        _UNICODE = False
+    if color == "never":
+        _COLOR = False
+    elif color == "always":
+        _enable_windows_ansi()
+        _COLOR = True
+    else:
+        isatty = getattr(sys.stdout, "isatty", lambda: False)()
+        _COLOR = isatty and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb" and _enable_windows_ansi()
+
+
+def style(text, *names):
+    if not _COLOR or not names:
+        return text
+    codes = ";".join(ANSI[n] for n in names)
+    return f"\033[{codes}m{text}\033[0m"
+
+
+def sym(name):
+    uni, ascii_ = SYMBOLS[name]
+    return uni if _UNICODE else ascii_
+
+
+def char_width(ch):
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def disp_width(text):
+    """终端里的显示宽度：中日韩字符占两格。"""
+    return sum(char_width(ch) for ch in text)
+
+
+def fit(text, width):
+    """截断到 width 个显示宽度以内，超出时以省略号结尾。"""
+    if disp_width(text) <= width:
+        return text
+    ell = sym("ell")
+    limit = max(0, width - disp_width(ell))
+    out, used = [], 0
+    for ch in text:
+        w = char_width(ch)
+        if used + w > limit:
+            break
+        out.append(ch)
+        used += w
+    return "".join(out) + ell
+
+
+def pad(text, width):
+    return text + " " * max(0, width - disp_width(text))
+
+
+def term_width():
+    return max(60, shutil.get_terminal_size((100, 24)).columns)
+
+
+def short_path(path):
+    """把家目录缩写成 ~，让路径短一点。"""
+    home = str(HOME)
+    if path == home:
+        return "~"
+    for sep in ("/", "\\"):
+        if path.startswith(home + sep):
+            return "~" + path[len(home) :]
+    return path
+
+
+def warn(msg):
+    print(style(f"{sym('warn')} {msg}", "yellow"))
+
+
+def is_interactive():
+    """标准输入和输出都是终端时才提问；管道、重定向、CI 里一律不问。"""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def ask(prompt):
+    """读取一行输入；Ctrl-C / Ctrl-D 返回 None。"""
+    try:
+        return _input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+
+def confirm(question, default=False):
+    hint = "[Y/n]" if default else "[y/N]"
+    while True:
+        answer = ask(f"{question} {hint} ")
+        if answer is None:
+            return False
+        answer = answer.strip().lower()
+        if not answer:
+            return default
+        if answer in ("y", "yes", "是", "好"):
+            return True
+        if answer in ("n", "no", "否"):
+            return False
+
+
+def parse_selection(text, n):
+    """解析 "1-5,8 !3" 这样的编号选择（从 1 开始），返回从 0 开始的下标列表；格式不对返回 None。
+    空输入或只有排除项表示从全部开始；"none" 表示一个都不选。"""
+    tokens = [x for x in re.split(r"[,\s]+", text.strip().lower()) if x]
+    if tokens == ["none"]:
+        return []
+    include, exclude, has_include = set(), set(), False
+    for tok in tokens:
+        neg = tok.startswith("!")
+        body = tok[1:] if neg else tok
+        if body in ("all", "a"):
+            picked = set(range(n))
+        else:
+            m = re.fullmatch(r"(\d+)(?:-(\d+))?", body)
+            if not m:
+                return None
+            lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+            if lo > hi:
+                lo, hi = hi, lo
+            if lo < 1 or hi > n:
+                return None
+            picked = set(range(lo - 1, hi))
+        if neg:
+            exclude |= picked
+        else:
+            include |= picked
+            has_include = True
+    if not has_include:
+        include = set(range(n))
+    return sorted(include - exclude)
+
+
+def choose(items, question):
+    """列出编号后让用户选，返回选中的下标；取消时返回 None。"""
+    hint = t(
+        "Enter = all, e.g. 1-5,8 to pick, !3 to leave one out, none, q to cancel",
+        "回车 = 全部；例如 1-5,8 选择，!3 排除某一项，none 一个都不选，q 取消",
+    )
+    while True:
+        answer = ask(f"{question} ({hint}): ")
+        if answer is None or answer.strip().lower() in ("q", "quit"):
+            return None
+        picked = parse_selection(answer, len(items))
+        if picked is not None:
+            return picked
+        warn(t(f"Use numbers between 1 and {len(items)}.", f"请输入 1 到 {len(items)} 之间的编号。"))
 
 
 # ---------------------------------------------------------------- 路径发现
@@ -403,16 +603,30 @@ def desktop_running():
     return False
 
 
-def ensure_desktop_stopped(force):
-    """桌面端运行时直接退出，不做任何写入。"""
-    if desktop_running() and not force:
-        sys.exit(
+DESKTOP_RUNNING_MSG = (
+    "The Claude desktop app is running. Nothing was written. "
+    "Quit it completely (from the menu bar / system tray) and try again, or pass --force.",
+    "检测到桌面端正在运行，这次没有写入。请彻底退出（托盘/菜单栏里退出）后重试，或加 --force。",
+)
+
+
+def ensure_desktop_stopped(force, interactive=False):
+    """桌面端运行时不做任何写入。交互模式下等用户退出桌面端后按回车重试，否则直接退出。"""
+    if force:
+        return
+    while desktop_running():
+        if not interactive:
+            sys.exit(t(*DESKTOP_RUNNING_MSG))
+        warn(
             t(
-                "The Claude desktop app is running. Nothing was written. "
-                "Quit it completely (from the menu bar / system tray) and try again, or pass --force.",
-                "检测到桌面端正在运行，这次没有写入。请彻底退出（托盘/菜单栏里退出）后重试，或加 --force。",
+                "The Claude desktop app is running. Quit it completely (menu bar / system tray), "
+                "then press Enter to retry, or type q to cancel.",
+                "检测到桌面端正在运行。请彻底退出（托盘/菜单栏里退出）后按回车重试，输入 q 取消。",
             )
         )
+        answer = ask("> ")
+        if answer is None or answer.strip().lower() in ("q", "quit", "n", "no"):
+            sys.exit(t("Cancelled. Nothing was written.", "已取消，没有写入任何文件。"))
 
 
 def new_stamp():
@@ -433,14 +647,27 @@ def write_journal(created, moved=None, stamp=None):
     return p
 
 
-def undo(force=False):
+def undo(force=False, interactive=False):
     journals = sorted(JOURNAL_DIR.glob("journal-*.json")) if JOURNAL_DIR.exists() else []
     if not journals:
         print(t("Nothing to undo.", "没有可撤销的记录。"))
         return
-    ensure_desktop_stopped(force)
     j = journals[-1]
     data = json.loads(j.read_text(encoding="utf-8"))
+    if interactive:
+        when = journal_time(j)
+        print(
+            t(
+                f"Most recent run: {when} ({j.name}): created {len(data.get('created', []))} file(s), "
+                f"moved {len(data.get('moved', []))} file(s)/folder(s).",
+                f"最近一次运行：{when}（{j.name}）：新建 {len(data.get('created', []))} 个文件，"
+                f"移除 {len(data.get('moved', []))} 个文件/目录。",
+            )
+        )
+        if not confirm(t("Undo it?", "撤销这次运行？")):
+            print(t("Cancelled.", "已取消。"))
+            return
+    ensure_desktop_stopped(force, interactive)
     n = 0
     for f in data.get("created", []):
         fp = Path(f)
@@ -458,11 +685,21 @@ def undo(force=False):
             m += 1
     j.rename(j.with_suffix(".undone"))
     print(
+        style(sym("ok"), "green"),
         t(
             f"Undid {j.name}: removed {n} created file(s), restored {m} file(s)/folder(s). Restart the desktop app.",
             f"已撤销 {j.name}：删除了 {n} 个新建文件，还原了 {m} 个文件/目录。请重启桌面端。",
-        )
+        ),
     )
+
+
+def journal_time(path):
+    """journal-20261111-140200-123456.json → 2026-11-11 14:02:00；解析不了就返回文件名。"""
+    try:
+        stamp = path.stem.split("-", 1)[1]
+        return dt.datetime.strptime(stamp, "%Y%m%d-%H%M%S-%f").strftime("%Y-%m-%d %H:%M:%S")
+    except (IndexError, ValueError):
+        return path.name
 
 
 # ---------------------------------------------------------------- 清除已归档
@@ -480,32 +717,12 @@ def is_recently_written(paths, now=None):
     return False
 
 
-def purge_archived(indexes, archived_ids, projects, apply, trash, excluded=(), project=None):
-    """彻底删除已归档会话，模仿桌面端"删除"的效果：
-      * 删除所有账号里指向该会话的 local_*.json 索引
-      * 从 archived-sessions.idx 中移除对应条目
-      * 在原账号目录写入 deleted_<cliSessionId> 标记（防止被再次同步）
-      * 删除 CLI 的 <会话ID>.jsonl 及同名子目录（子代理记录等）
-    所有被删/被改的文件都先移动到 trash 目录，可用 --undo 还原。
+def plan_purge(indexes, archived_ids, projects, excluded=(), project=None):
+    """找出可以彻底删除的已归档会话，不做任何修改。
     excluded 里的会话、工作目录不包含 project 的会话、最近仍在写入的会话都会跳过。
-    返回 (created, moved)。
+    返回 (plan, running, filtered)：plan 是 [(cid, title, idx_hits, cli_hits)]，
+    running 是跳过的仍在写入的会话 ID，filtered 是按 --exclude/--project 跳过的数量。
     """
-    created, moved = [], []
-    now_ms = str(int(time.time() * 1000))
-
-    idx_backed = set()
-
-    def backup_path(path):
-        dst = trash / path.relative_to(path.anchor)
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        return dst
-
-    def backup(path):
-        dst = backup_path(path)
-        shutil.move(str(path), str(dst))
-        moved.append((path, dst))
-        return dst
-
     plan, running, filtered = [], [], 0
     for cid in sorted(i for i in archived_ids if i):
         if cid in excluded:
@@ -523,19 +740,35 @@ def purge_archived(indexes, archived_ids, projects, apply, trash, excluded=(), p
         if is_recently_written(cli_hits):
             running.append(cid)
             continue
-        plan.append((cid, idx_hits, cli_hits))
-
-    print(t(f"\n=== Purge archived sessions: {len(plan)} ===", f"\n=== 清除已归档会话：{len(plan)} 个 ==="))
-    for cid, idx_hits, cli_hits in plan:
         title = next((e.get("title") for _, _, e in idx_hits if e.get("title")), cid)
-        print(
-            t(
-                f"  - {title}  [{cid}]  {len(idx_hits)} index file(s), {len(cli_hits)} CLI file(s)",
-                f"  - {title}  [{cid}]  索引 {len(idx_hits)} 个，CLI 文件 {len(cli_hits)} 个",
-            )
-        )
-        if not apply:
-            continue
+        plan.append((cid, title, idx_hits, cli_hits))
+    return plan, running, filtered
+
+
+def execute_purge(plan, trash):
+    """按 plan_purge 的结果彻底删除，模仿桌面端"删除"的效果：
+      * 删除所有账号里指向该会话的 local_*.json 索引
+      * 从 archived-sessions.idx 中移除对应条目
+      * 在原账号目录写入 deleted_<cliSessionId> 标记（防止被再次同步）
+      * 删除 CLI 的 <会话ID>.jsonl 及同名子目录（子代理记录等）
+    所有被删/被改的文件都先移动到 trash 目录，可用 --undo 还原。返回 (created, moved)。
+    """
+    created, moved = [], []
+    now_ms = str(int(time.time() * 1000))
+    idx_backed = set()
+
+    def backup_path(path):
+        dst = trash / path.relative_to(path.anchor)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        return dst
+
+    def backup(path):
+        dst = backup_path(path)
+        shutil.move(str(path), str(dst))
+        moved.append((path, dst))
+        return dst
+
+    for cid, _title, idx_hits, cli_hits in plan:
         local_ids_by_dir = {}
         for d, f, e in idx_hits:
             local_ids_by_dir.setdefault(d, set()).update({f.stem, e.get("sessionId")})
@@ -562,20 +795,6 @@ def purge_archived(indexes, archived_ids, projects, apply, trash, excluded=(), p
                     idx.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         for p in cli_hits:
             backup(p)
-    if running:
-        print(
-            t(
-                f"  (skipped {len(running)} archived session(s) still being written)",
-                f"  （跳过 {len(running)} 个最近仍在写入的归档会话）",
-            )
-        )
-    if filtered:
-        print(
-            t(
-                f"  (skipped {filtered} archived session(s) because of --exclude/--project)",
-                f"  （按 --exclude/--project 跳过 {filtered} 个归档会话）",
-            )
-        )
     return created, moved
 
 
@@ -684,9 +903,16 @@ def account_label(acct, org, book, cli_acct):
 
 
 def account_heading(acct, org, book, cli_acct):
-    ids = f"{acct[:8]}…/{org[:8]}…"
+    ell = sym("ell")
+    ids = f"{acct[:8]}{ell}/{org[:8]}{ell}"
     label = account_label(acct, org, book, cli_acct)
     return f"[{label}] ({ids})" if label else f"[{ids}]"
+
+
+def account_short(acct, org, book, cli_acct):
+    """会话列表里"补到哪些账号"用的短名称。"""
+    label = account_label(acct, org, book, cli_acct)
+    return label.split(" · ")[0] if label else f"{acct[:8]}{sym('ell')}"
 
 
 def resolve_account_key(key, all_accts):
@@ -733,6 +959,382 @@ def set_aliases(specs, all_accts):
     save_account_book(book)
 
 
+# ---------------------------------------------------------------- 排除列表与交互挑选
+
+LIST_LIMIT = 20  # 预览时默认最多列出这么多待补会话，-v 显示全部
+CANCELLED = ("Cancelled. Nothing was written.", "已取消，没有写入任何文件。")
+
+
+def default_exclude_file():
+    """-i 里选择"记住"的会话写到这里，之后每次运行都会自动排除。"""
+    return JOURNAL_DIR / "exclude.txt"
+
+
+def read_exclude_file(path, must_exist=False):
+    """每行一个会话 ID，# 后面是注释。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        if must_exist:
+            sys.exit(t(f"Exclude file not found: {path}", f"找不到排除列表文件：{path}"))
+        return set()
+    return {ln.split("#", 1)[0].strip() for ln in text.splitlines()} - {""}
+
+
+def add_to_exclude_file(sessions):
+    path = default_exclude_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        for s in sessions:
+            title = " ".join(str(s["title"]).split())
+            fh.write(f"{s['id']}  # {title}\n")
+    return path
+
+
+def format_time(ms):
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ms / 1000))
+
+
+def pick_interactively(rows):
+    """-i：先选账号（多于一个时），再选会话。直接修改 rows 里的 todo。"""
+    writable = [r for r in rows if r["template"] and r["todo"]]
+    if not writable:
+        return
+    if len(writable) > 1:
+        print(style(t("Accounts with sessions to add:", "有待补会话的账号："), "bold"))
+        for i, r in enumerate(writable, 1):
+            print(f"  {i:>3}. {r['heading']}  " + t(f"to add {len(r['todo'])}", f"待补 {len(r['todo'])}"))
+        picked = choose(writable, t("Accounts to sync", "要同步的账号"))
+        if picked is None:
+            sys.exit(t(*CANCELLED))
+        for i, r in enumerate(writable):
+            if i not in picked:
+                r["todo"] = []
+        writable = [writable[i] for i in picked]
+        print()
+
+    order = sorted({s["id"]: s for r in writable for s in r["todo"]}.values(), key=lambda s: -s["lastActivityAt"])
+    if not order:
+        return
+    print(style(t(f"Sessions to add ({len(order)}):", f"待补会话（{len(order)} 个）："), "bold"))
+    col = max(16, (term_width() - 30) // 2)
+    for i, s in enumerate(order, 1):
+        cwd = style(fit(short_path(s["cwd"]), col), "dim")
+        print(f"  {i:>3}. {format_time(s['lastActivityAt'])}  {pad(fit(s['title'], col), col)}  {cwd}")
+    picked = choose(order, t("Sessions to sync", "要同步的会话"))
+    if picked is None:
+        sys.exit(t(*CANCELLED))
+    keep = {order[i]["id"] for i in picked}
+    for r in writable:
+        r["todo"] = [s for s in r["todo"] if s["id"] in keep]
+    dropped = [s for s in order if s["id"] not in keep]
+    if dropped and confirm(
+        t(
+            f"Remember the {len(dropped)} session(s) you left out, so later runs skip them too?",
+            f"记住没选的 {len(dropped)} 个会话，以后运行也自动跳过？",
+        )
+    ):
+        path = add_to_exclude_file(dropped)
+        print(
+            style(
+                t(
+                    f"Saved to {path}; delete a line there to sync it again.",
+                    f"已记到 {path}；删掉对应行即可恢复同步。",
+                ),
+                "dim",
+            )
+        )
+    print()
+
+
+# ---------------------------------------------------------------- 预览输出
+
+
+class SyncReport:
+    """一次运行的同步计划：负责普通/安静/详细三种文本输出和 JSON 输出。"""
+
+    def __init__(self, rows, sessions, skipped, recent, held_back, purge, archived_global, deleted_global):
+        self.rows = rows
+        self.sessions = sessions
+        self.skipped = skipped
+        self.recent = recent
+        self.held_back = held_back
+        self.purge = purge  # None 表示没有加 --purge-archived，否则是 plan_purge 的结果
+        self.archived_global = archived_global
+        self.deleted_global = deleted_global
+
+    def writable(self):
+        return [r for r in self.rows if r["template"]]
+
+    def pending(self):
+        """[(会话, [要补进去的账号行])]，按最后活动时间倒序。"""
+        found = {}
+        for r in self.writable():
+            for s in r["todo"]:
+                found.setdefault(s["id"], (s, []))[1].append(r)
+        return sorted(found.values(), key=lambda x: -x[0]["lastActivityAt"])
+
+    def n_files(self):
+        return sum(len(r["todo"]) for r in self.writable())
+
+    def purge_plan(self):
+        return self.purge[0] if self.purge else []
+
+    def has_work(self):
+        return self.n_files() > 0 or bool(self.purge_plan())
+
+    def targets_text(self, targets):
+        total = len(self.writable())
+        if total <= 1:
+            return ""
+        names = t("all accounts", "全部账号") if len(targets) == total else ", ".join(r["short"] for r in targets)
+        return f"  {sym('arrow')} {names}"
+
+    def session_line(self, s, targets, verbose=False):
+        lead = f"  {sym('add')} "
+        when = format_time(s["lastActivityAt"])
+        tgt = self.targets_text(targets)
+        mark = t("  [still being written]", "  （最近仍在写入）") if s["id"] in self.recent else ""
+        extra = f"  {s['id']}" if verbose else ""
+        fixed = disp_width(lead) + disp_width(when) + 4 + disp_width(tgt) + disp_width(mark) + len(extra)
+        room = max(24, term_width() - fixed)
+        title_w = min(disp_width(s["title"]), max(12, room * 3 // 5))
+        title = fit(s["title"], title_w)
+        cwd = fit(short_path(s["cwd"]), max(8, room - disp_width(title)))
+        return (
+            style(lead, "green")
+            + style(when, "dim")
+            + "  "
+            + title
+            + "  "
+            + style(cwd, "dim")
+            + style(tgt, "cyan")
+            + style(mark, "yellow")
+            + style(extra, "dim")
+        )
+
+    def print_plan(self, verbose=False, quiet=False):
+        pending = self.pending()
+        limit = None if verbose else LIST_LIMIT
+        ell = sym("ell")
+        if not quiet:
+            print(
+                style(
+                    t(
+                        f"CLI sessions: {len(self.sessions)} usable · desktop accounts: {len(self.rows)}",
+                        f"CLI 会话 {len(self.sessions)} 个 · 桌面端账号 {len(self.rows)} 个",
+                    ),
+                    "bold",
+                )
+            )
+            if verbose:
+                print(
+                    style(
+                        t(
+                            f"  skipped {self.skipped} empty or without a working directory; archived/deleted in any "
+                            f"account: {len(self.archived_global)} (deletion markers: {len(self.deleted_global)})",
+                            f"  跳过 {self.skipped} 个空会话/无 cwd 的记录；任一账号中已归档/已删除 "
+                            f"{len(self.archived_global)} 个（其中删除标记 {len(self.deleted_global)} 个）",
+                        ),
+                        "dim",
+                    )
+                )
+            print()
+            print(style(t("Accounts", "账号"), "bold"))
+            width = max(disp_width(r["heading"]) for r in self.rows)
+            for r in self.rows:
+                n = len(r["todo"])
+                count = t(f"existing {r['known']} · to add {n}", f"已有 {r['known']} · 待补 {n}")
+                dot = style(sym("dot"), "green" if n and r["template"] else "dim")
+                print(f"  {dot} {pad(r['heading'], width)}  {style(count, 'bold' if n else 'dim')}")
+                if n and r["source"] == "borrowed":
+                    print(
+                        style(
+                            "      · "
+                            + t(
+                                "No sessions in this account yet; borrowing a template from another account",
+                                "该账号下暂无会话，借用其他账号的会话作为模板",
+                            ),
+                            "dim",
+                        )
+                    )
+                if n and r["source"] == "none":
+                    print(
+                        "      "
+                        + style(
+                            f"{sym('warn')} "
+                            + t(
+                                "No session to use as a template; skipped. Create a Code session in the desktop app first.",
+                                "找不到任何可用作模板的会话，跳过。请先在桌面端建一个 Code 会话。",
+                            ),
+                            "yellow",
+                        )
+                    )
+            if pending:
+                print()
+                print(style(t(f"Sessions to add ({len(pending)})", f"待补会话（{len(pending)} 个）"), "bold"))
+                for s, targets in pending[:limit]:
+                    print(self.session_line(s, targets, verbose))
+                if limit and len(pending) > limit:
+                    more = len(pending) - limit
+                    print(
+                        style(
+                            t(
+                                f"  {ell} and {more} more (pass -v to list all)",
+                                f"  {ell} 还有 {more} 个（加 -v 查看全部）",
+                            ),
+                            "dim",
+                        )
+                    )
+
+        included = [s for s, _ in pending if s["id"] in self.recent]
+        if self.held_back or included:
+            print()
+        if self.held_back:
+            warn(
+                t(
+                    f"Skipped {len(self.held_back)} session(s) written in the last 2 minutes (probably still running). "
+                    "Pass --include-recent to sync them anyway.",
+                    f"跳过 {len(self.held_back)} 个最近 2 分钟内仍在写入的会话（可能正在运行）。"
+                    "如需一并同步，加 --include-recent。",
+                )
+            )
+        if included:
+            warn(
+                t(
+                    f"Included {len(included)} session(s) still being written. Their title and last-activity "
+                    "time may be out of date, and don't type into the same session from the CLI and the desktop app "
+                    "at the same time.",
+                    f"包含了 {len(included)} 个最近仍在写入的会话。它们的标题和最后活动时间可能不是最新的，"
+                    "也不要在 CLI 和桌面端同时向同一个会话输入。",
+                )
+            )
+
+        if self.purge is not None:
+            plan, running, filtered = self.purge
+            print()
+            print(
+                style(
+                    t(f"Purge archived sessions: {len(plan)}", f"清除已归档会话：{len(plan)} 个"),
+                    "bold",
+                    "red" if plan else "dim",
+                )
+            )
+            if not quiet:
+                for cid, title, idx_hits, cli_hits in plan[:limit]:
+                    files = t(
+                        f"{len(idx_hits)} index file(s), {len(cli_hits)} CLI file(s)",
+                        f"索引 {len(idx_hits)} 个，CLI 文件 {len(cli_hits)} 个",
+                    )
+                    print(f"  {style(sym('del'), 'red')} {fit(str(title), 50)}  " + style(f"[{cid}]  {files}", "dim"))
+                if limit and len(plan) > limit:
+                    more = len(plan) - limit
+                    print(
+                        style(
+                            t(
+                                f"  {ell} and {more} more (pass -v to list all)",
+                                f"  {ell} 还有 {more} 个（加 -v 查看全部）",
+                            ),
+                            "dim",
+                        )
+                    )
+            if running:
+                print(
+                    style(
+                        t(
+                            f"  (skipped {len(running)} archived session(s) still being written)",
+                            f"  （跳过 {len(running)} 个最近仍在写入的归档会话）",
+                        ),
+                        "dim",
+                    )
+                )
+            if filtered:
+                print(
+                    style(
+                        t(
+                            f"  (skipped {filtered} archived session(s) because of --exclude/--project)",
+                            f"  （按 --exclude/--project 跳过 {filtered} 个归档会话）",
+                        ),
+                        "dim",
+                    )
+                )
+
+        print()
+        if not self.has_work():
+            print(
+                style(
+                    f"{sym('ok')} " + t("Everything is in sync; nothing to add.", "已全部同步，没有需要补的会话。"),
+                    "green",
+                )
+            )
+            return
+        parts = []
+        if self.n_files():
+            k = sum(1 for r in self.writable() if r["todo"])
+            parts.append(
+                t(
+                    f"add {len(pending)} session(s) ({self.n_files()} index file(s) in {k} account(s))",
+                    f"补 {len(pending)} 个会话（{k} 个账号共 {self.n_files()} 个索引文件）",
+                )
+            )
+        if self.purge_plan():
+            parts.append(
+                t(
+                    f"delete {len(self.purge_plan())} archived session(s)",
+                    f"彻底删除 {len(self.purge_plan())} 个已归档会话",
+                )
+            )
+        print(style(t("Plan: ", "计划：") + t("; ", "；").join(parts), "bold"))
+
+    def to_json(self, applied, purged, written):
+        def iso(ms):
+            return dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        purge = None
+        if self.purge is not None:
+            plan, running, filtered = self.purge
+            purge = {
+                "sessions": [
+                    {"id": cid, "title": title, "index_files": len(idx), "cli_files": len(cli)}
+                    for cid, title, idx, cli in plan
+                ],
+                "skipped_running": sorted(running),
+                "skipped_filtered": filtered,
+                "performed": bool(applied and purged and plan),
+            }
+        return {
+            "version": __version__,
+            "mode": "apply" if applied else "preview",
+            "cli_sessions": len(self.sessions),
+            "skipped_invalid": self.skipped,
+            "accounts": [
+                {
+                    "account": r["acct"],
+                    "org": r["org"],
+                    "label": r["label"],
+                    "existing": r["known"],
+                    "to_add": [s["id"] for s in r["todo"]] if r["template"] else [],
+                    "template": r["source"],
+                }
+                for r in self.rows
+            ],
+            "sessions": [
+                {
+                    "id": s["id"],
+                    "title": s["title"],
+                    "cwd": s["cwd"],
+                    "last_activity": iso(s["lastActivityAt"]),
+                    "still_being_written": s["id"] in self.recent,
+                    "accounts": [f"{r['acct']}/{r['org']}" for r in targets],
+                }
+                for s, targets in self.pending()
+            ],
+            "skipped_recent": sorted(self.held_back),
+            "purge": purge,
+            "written": written,
+        }
+
+
 # ---------------------------------------------------------------- 主流程
 
 
@@ -766,7 +1368,8 @@ def main(argv=None):
         epilog=t(
             """\
 Typical workflow:
-  %(prog)s                          preview what each account would get
+  %(prog)s                          preview what each account would get (in a terminal, asks to write)
+  %(prog)s -i                       pick accounts and sessions from a list, then write
   %(prog)s --apply                  write (quit the desktop app completely first, e.g. ⌘Q)
   %(prog)s --undo                   undo the most recent write/purge
 
@@ -786,7 +1389,8 @@ Notes:
 """,
             """\
 常用流程：
-  %(prog)s                          预览每个账号会补哪些会话
+  %(prog)s                          预览每个账号会补哪些会话（在终端里会问是否写入）
+  %(prog)s -i                       从列表里挑选账号和会话后写入
   %(prog)s --apply                  写入（先 ⌘Q 彻底退出桌面端）
   %(prog)s --undo                   撤销最近一次写入/删除
 
@@ -902,10 +1506,61 @@ Notes:
             "同步后彻底删除已归档会话（索引 + CLI 的 .jsonl，备份到日志目录，可 --undo）",
         ),
     )
+    ap.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help=t(
+            "pick accounts and sessions from a numbered list before writing",
+            "写入前从编号列表里挑选账号和会话",
+        ),
+    )
+    ap.add_argument(
+        "--no-input",
+        action="store_true",
+        help=t(
+            "never ask questions, even in a terminal (behaves like a script)",
+            "即使在终端里也不提问（和脚本里运行一样）",
+        ),
+    )
+    verbosity = ap.add_mutually_exclusive_group()
+    verbosity.add_argument("-q", "--quiet", action="store_true", help=t("only print the summary", "只输出汇总"))
+    verbosity.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help=t("print every session and extra statistics", "列出全部会话和更多统计"),
+    )
+    ap.add_argument(
+        "--json",
+        action="store_true",
+        help=t(
+            "print the result as JSON (implies --no-input and no colors)",
+            "以 JSON 输出结果（同时不提问、不带颜色）",
+        ),
+    )
+    ap.add_argument(
+        "--color",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help=t(
+            "colored output (default: auto, only in a terminal; NO_COLOR is honored)",
+            "彩色输出（默认 auto：只在终端里启用，遵循 NO_COLOR）",
+        ),
+    )
     args = ap.parse_args(argv)
+    setup_terminal("never" if args.json else args.color)
+    interactive = not args.no_input and not args.json and is_interactive()
+    if args.interactive and not interactive:
+        sys.exit(
+            t(
+                "--interactive needs a terminal and cannot be combined with --json or --no-input.",
+                "--interactive 需要在终端里运行，且不能和 --json、--no-input 一起用。",
+            )
+        )
 
     if args.undo:
-        undo(args.force)
+        undo(args.force, interactive)
         return
 
     projects = cli_projects_dir(args.projects_dir)
@@ -935,17 +1590,14 @@ Notes:
     book = load_account_book()
     cli_acct = cli_login_account()
 
-    excluded = set(args.exclude)
+    excluded = set(args.exclude) | read_exclude_file(default_exclude_file())
     if args.exclude_file:
-        excluded |= {
-            ln.strip() for ln in Path(args.exclude_file).read_text(encoding="utf-8").splitlines() if ln.strip()
-        }
+        excluded |= read_exclude_file(Path(args.exclude_file).expanduser(), must_exist=True)
 
     # 读取各账号索引
     indexes = {}
     archived_global = set()
     deleted_global = set()
-    archived_only_global = set()
     for _root, acct, org, d in accts:
         entries = load_index(d)
         deleted, archived_local = load_markers(d)
@@ -956,7 +1608,6 @@ Notes:
             if isinstance(e, dict)
             and (is_archived(e) or f.stem in archived_local or e.get("sessionId") in archived_local)
         }
-        archived_only_global |= archived
         archived |= deleted  # 桌面端删除过的会话同样不再补
         archived_global |= archived
         deleted_global |= deleted
@@ -1009,97 +1660,36 @@ Notes:
     now = time.time()
     recent = {s["id"] for s in sessions if now - s["mtime"] < RUNNING_GRACE_SEC}
     skip_recent = set() if args.include_recent else recent
-    included_recent = set()
 
-    print(
-        t(
-            f"CLI sessions: {len(sessions)} usable (skipped {skipped} empty or without a working directory)",
-            f"CLI 会话：{len(sessions)} 个有效（跳过 {skipped} 个空会话/无 cwd 的记录）",
-        )
-    )
-    print(
-        t(
-            f"Desktop account directories: {len(indexes)}; archived/deleted in any account: "
-            f"{len(archived_global)} (deletion markers: {len(deleted_global)})\n",
-            f"桌面端账号目录：{len(indexes)} 个；任一账号中已归档/已删除："
-            f"{len(archived_global)} 个（其中删除标记 {len(deleted_global)} 个）\n",
-        )
-    )
-
-    if args.apply:
-        ensure_desktop_stopped(args.force)
-        if remember_cli_account(book, cli_acct):
-            save_account_book(book)
-
-    created = []
+    # 每个账号要补哪些会话
+    rows, held_back = [], set()
     for d, (acct, org, entries, known, archived) in indexes.items():
-        template = pick_template(entries)
-        arch = archived if args.per_account_archive else archived_global
-        todo = [
-            s
-            for s in sessions
-            if s["id"] not in known and s["id"] not in arch and s["id"] not in excluded and s["id"] not in skip_recent
-        ]
-        print(
-            t(
-                f"{account_heading(acct, org, book, cli_acct)} existing {len(known)}, to add {len(todo)}",
-                f"{account_heading(acct, org, book, cli_acct)} 已有 {len(known)}，待补 {len(todo)}",
-            )
-        )
+        template, source = pick_template(entries), "own"
         if not template:
             template = fallback.get(root_of[d]) or any_fallback
-            if template and todo:
-                print(
-                    t(
-                        "  · No sessions in this account yet; borrowing a template from another account",
-                        "  · 该账号下暂无会话，借用其他账号的会话作为模板",
-                    )
-                )
-        if not template:
-            if todo:
-                print(
-                    t(
-                        "  ! No session to use as a template; skipped. Create a Code session in the desktop app first.",
-                        "  ! 找不到任何可用作模板的会话，跳过。请先在桌面端建一个 Code 会话。",
-                    )
-                )
-            continue
-        for s in sorted(todo, key=lambda x: -x["lastActivityAt"]):
-            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["lastActivityAt"] / 1000))
-            mark = ""
-            if s["id"] in recent:
-                included_recent.add(s["id"])
-                mark = t("  [still being written]", "  （最近仍在写入）")
-            print(f"  + {when}  {s['title']}  ({s['cwd']}){mark}")
-            if args.apply:
-                new_id, entry = build_entry(template, s)
-                out = d / f"{new_id}.json"
-                with open(out, "w", encoding="utf-8") as fh:
-                    json.dump(entry, fh, ensure_ascii=False, indent=2)
-                created.append(out)
-
-    if skip_recent:
-        print(
-            t(
-                f"\nSkipped {len(skip_recent)} session(s) written in the last 2 minutes (probably still running). "
-                "Pass --include-recent to sync them anyway.",
-                f"\n跳过 {len(skip_recent)} 个最近 2 分钟内仍在写入的会话（可能正在运行）。"
-                "如需一并同步，加 --include-recent。",
-            )
-        )
-    if included_recent:
-        print(
-            t(
-                f"\n! Included {len(included_recent)} session(s) still being written. Their title and last-activity "
-                "time may be out of date, and don't type into the same session from the CLI and the desktop app "
-                "at the same time.",
-                f"\n! 包含了 {len(included_recent)} 个最近仍在写入的会话。它们的标题和最后活动时间可能不是最新的，"
-                "也不要在 CLI 和桌面端同时向同一个会话输入。",
-            )
+            source = "borrowed" if template else "none"
+        arch = archived if args.per_account_archive else archived_global
+        missing = [s for s in sessions if s["id"] not in known and s["id"] not in arch and s["id"] not in excluded]
+        held_back |= {s["id"] for s in missing if s["id"] in skip_recent}
+        rows.append(
+            {
+                "dir": d,
+                "acct": acct,
+                "org": org,
+                "known": len(known),
+                "todo": [s for s in missing if s["id"] not in skip_recent],
+                "template": template,
+                "source": source,
+                "label": account_label(acct, org, book, cli_acct),
+                "heading": account_heading(acct, org, book, cli_acct),
+                "short": account_short(acct, org, book, cli_acct),
+            }
         )
 
-    moved = []
-    stamp = new_stamp()
+    if args.interactive:
+        pick_interactively(rows)
+
+    purge = None
     if args.purge_archived:
         # 清除时始终覆盖全部账号，避免 --account 过滤后其他账号残留指向已删 .jsonl 的索引；
         # --exclude 和 --project 仍然生效，正在写入的会话按 .jsonl 修改时间单独判断
@@ -1114,51 +1704,97 @@ Notes:
                 and (is_archived(e) or f.stem in archived_local or e.get("sessionId") in archived_local)
             }
             all_idx[d] = (acct, org, entries, None, None)
-        c2, moved = purge_archived(
-            all_idx,
-            all_archived,
-            projects,
-            args.apply,
-            JOURNAL_DIR / f"trash-{stamp}",
-            excluded=excluded,
-            project=args.project,
-        )
-        created += c2
+        purge = plan_purge(all_idx, all_archived, projects, excluded=excluded, project=args.project)
 
-    if args.apply:
-        if created or moved:
-            j = write_journal(created, moved, stamp)
-            trash = JOURNAL_DIR / f"trash-{stamp}"
-            if moved:
+    report = SyncReport(rows, sessions, skipped, recent, held_back, purge, archived_global, deleted_global)
+    if not args.json:
+        report.print_plan(verbose=args.verbose, quiet=args.quiet)
+
+    # 决定是否写入：--apply，或者在终端里预览后确认
+    apply, do_purge = args.apply, bool(purge and purge[0])
+    if interactive and report.has_work():
+        if not apply:
+            print()
+            apply = confirm(t("Write now?", "现在写入？"))
+        if apply and do_purge:
+            answer = ask(
+                t(
+                    f"Type yes to permanently delete {len(purge[0])} archived session(s) "
+                    "(backed up, --undo restores them): ",
+                    f"输入 yes 确认彻底删除 {len(purge[0])} 个已归档会话（会先备份，可 --undo 还原）：",
+                )
+            )
+            if (answer or "").strip().lower() != "yes":
+                do_purge = False
+                warn(t("Purge skipped; archived sessions are kept.", "已跳过清除，已归档会话保留。"))
+
+    written = None
+    if apply:
+        ensure_desktop_stopped(args.force, interactive)
+        if remember_cli_account(book, cli_acct):
+            save_account_book(book)
+        created, moved = [], []
+        for r in rows:
+            if not r["template"]:
+                continue
+            for s in r["todo"]:
+                new_id, entry = build_entry(r["template"], s)
+                out = r["dir"] / f"{new_id}.json"
+                with open(out, "w", encoding="utf-8") as fh:
+                    json.dump(entry, fh, ensure_ascii=False, indent=2)
+                created.append(out)
+        stamp = new_stamp()
+        trash = JOURNAL_DIR / f"trash-{stamp}"
+        if do_purge:
+            c2, moved = execute_purge(purge[0], trash)
+            created += c2
+        journal = write_journal(created, moved, stamp) if created or moved else None
+        written = {"created": len(created), "moved": len(moved), "journal": str(journal) if journal else None}
+        if not args.json:
+            print()
+            if journal and moved:
                 print(
+                    style(sym("ok"), "green"),
                     t(
-                        f"\nCreated {len(created)} file(s), moved {len(moved)} file(s)/folder(s) to {trash}. "
-                        f"Journal: {j}",
-                        f"\n已写入/新建 {len(created)} 个文件，移除 {len(moved)} 个文件/目录（备份在 {trash}）。日志：{j}",
-                    )
+                        f"Created {len(created)} file(s), moved {len(moved)} file(s)/folder(s) to {trash}. "
+                        f"Journal: {journal}",
+                        f"已写入/新建 {len(created)} 个文件，移除 {len(moved)} 个文件/目录（备份在 {trash}）。"
+                        f"日志：{journal}",
+                    ),
+                )
+            elif journal:
+                print(
+                    style(sym("ok"), "green"),
+                    t(
+                        f"Created {len(created)} file(s). Journal: {journal}",
+                        f"已写入/新建 {len(created)} 个文件。日志：{journal}",
+                    ),
                 )
             else:
+                print(t("Nothing to write.", "没有需要写入的会话。"))
+            if journal:
                 print(
                     t(
-                        f"\nCreated {len(created)} file(s). Journal: {j}",
-                        f"\n已写入/新建 {len(created)} 个文件。日志：{j}",
+                        "Reopen the desktop app to check. If anything looks wrong, run --undo.",
+                        "请重新打开桌面端查看；如有问题运行 --undo 撤销。",
                     )
                 )
+    elif not args.json and report.has_work():
+        if interactive:
+            print(t("Nothing was written.", "没有写入任何文件。"))
+        else:
             print(
-                t(
-                    "Reopen the desktop app to check. If anything looks wrong, run --undo.",
-                    "请重新打开桌面端查看；如有问题运行 --undo 撤销。",
+                style(
+                    t(
+                        "\n(Preview only; nothing was written. Run again with --apply to write.)",
+                        "\n（预览模式，未写入任何文件。确认无误后加 --apply 执行。）",
+                    ),
+                    "dim",
                 )
             )
-        else:
-            print(t("\nNothing to write.", "\n没有需要写入的会话。"))
-    else:
-        print(
-            t(
-                "\n(Preview only; nothing was written. Run again with --apply to write.)",
-                "\n（预览模式，未写入任何文件。确认无误后加 --apply 执行。）",
-            )
-        )
+
+    if args.json:
+        print(json.dumps(report.to_json(apply, do_purge, written), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

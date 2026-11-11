@@ -95,9 +95,41 @@ claude-session-sync --apply
 claude-session-sync --undo
 ```
 
-> If it says the desktop app is running, the app is still alive in the menu bar or system tray and **nothing was written**. Quit it fully and run again.
+> If it says the desktop app is running, the app is still alive in the menu bar or system tray and **nothing was written**. Quit it fully and run again (in a terminal it waits for you instead).
+
+In a terminal you can skip step 2: the preview ends with `Write now? [y/N]`. See [Output and interactive use](https://github.com/xushenjie/claude-session-sync#output-and-interactive-use).
 
 Output is in English, or in Chinese when your locale (`LC_ALL` / `LC_MESSAGES` / `LANG`, or the Windows display language) is Chinese. Pass `--lang en` or `--lang zh` for a single run, or set `CLAUDE_SESSION_SYNC_LANG=en` or `zh` in your shell profile to change it for good without touching your locale.
+
+## Output and interactive use
+
+A preview looks like this (made-up data):
+
+```text
+CLI sessions: 125 usable · desktop accounts: 3
+
+Accounts
+  ● [work] (66864cb7…/ed1ba056…)                    existing 149 · to add 2
+  ● [al***@example.com · current CLI login] (…)     existing 122 · to add 1
+  ● [b8073c71…/ed1ba056…]                           existing 119 · to add 0
+
+Sessions to add (2)
+  + 2026-11-11 19:16  Fix login redirect   ~/work/webapp   → all accounts
+  + 2026-11-10 09:02  Draft release notes  ~/work/docs     → work
+
+⚠ Skipped 1 session(s) written in the last 2 minutes (probably still running). Pass --include-recent to sync them anyway.
+
+Plan: add 2 session(s) (3 index file(s) in 2 account(s))
+
+Write now? [y/N]
+```
+
+- Each session is listed once, with the accounts it goes to (`→`). Up to 20 are shown; `-v` lists all of them, plus session IDs and extra statistics. `-q` prints only the summary and warnings.
+- **Prompts only appear in a terminal.** When both input and output are a terminal, the preview ends with `Write now? [y/N]` — press `y` to write without re-running, or Enter to keep it a preview. If the desktop app is still running, it waits for you to quit it and press Enter. Scripts, pipes, and CI never get a question; `--no-input` turns prompts off in a terminal too.
+- `-i` / `--interactive` shows numbered lists of accounts (when more than one has something to add) and sessions to pick from. Press Enter for all, or type `1-5,8` to pick, `!3` to leave one out, `none`, or `q` to cancel. Sessions you leave out can be remembered in `~/.claude-desktop-sync/exclude.txt`, which every later run reads automatically; delete a line there to sync that session again.
+- In a terminal, `--purge-archived` only deletes after you type `yes`, and `--undo` shows what the last run did and asks first.
+- `--json` prints the plan (and, with `--apply`, what was written) as JSON for scripts. It never prompts and has no colors.
+- Colors are used only in a terminal. `NO_COLOR` is honored; `--color always|never` overrides. If the terminal can't show symbols such as `✓` or `→`, ASCII is used instead.
 
 ---
 
@@ -139,6 +171,7 @@ claude-session-sync --purge-archived --apply   # do it
 - purging always covers **all accounts**, even with `--account`, so no account is left with an index pointing to a removed transcript;
 - `--exclude`, `--exclude-file`, and `--project` apply to purging too — excluded sessions are never deleted;
 - sessions whose `.jsonl` was modified in the last 2 minutes are always skipped, even with `--include-recent`;
+- in a terminal, deletion only happens after you type `yes`; anything else keeps the archived sessions and still runs the sync;
 - backups are not cleaned up automatically; once you're happy, delete `~/.claude-desktop-sync/trash-*` yourself.
 
 ---
@@ -158,13 +191,19 @@ claude-session-sync --purge-archived --apply   # do it
 | `--set-alias <id>=<name>` | Give an account a display name (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)); an empty name removes it. Repeatable; exits after saving |
 | `--project <string>` | Only handle sessions whose working directory contains this string (sync and purge) |
 | `--exclude <session-id>` | Exclude a session from sync and purge; repeatable |
-| `--exclude-file <file>` | Read excluded session IDs from a file, one per line |
+| `--exclude-file <file>` | Read excluded session IDs from a file, one per line; text after `#` is a comment. `~/.claude-desktop-sync/exclude.txt` is always read as well |
 | `--include-recent` | Also sync sessions written in the last 2 minutes (possibly still running). They are marked in the output; purging still skips them |
 | `--per-account-archive` | Only exclude sessions archived in the same account |
 | `--purge-archived` | Permanently delete archived sessions after syncing (see above) |
 | `--projects-dir <path>` | CLI sessions directory; defaults to `~/.claude/projects` and honors `CLAUDE_CONFIG_DIR` |
 | `--desktop-root <path>` | Path to a `claude-code-sessions` directory; repeatable |
 | `--force` | Run `--apply` or `--undo` even while the desktop app is running (not recommended; the app may overwrite the changes) |
+| `-i`, `--interactive` | Pick accounts and sessions from numbered lists before writing (terminal only) |
+| `--no-input` | Never ask questions, even in a terminal |
+| `-q`, `--quiet` | Only print the summary and warnings |
+| `-v`, `--verbose` | List every session, with session IDs and extra statistics |
+| `--json` | Print the result as JSON; implies `--no-input` and no colors |
+| `--color auto\|always\|never` | Colored output; `auto` (default) only colors a terminal and honors `NO_COLOR` |
 
 Examples:
 
@@ -202,7 +241,7 @@ Every `--apply` records a journal at `~/.claude-desktop-sync/journal-<timestamp>
 - `created`: files created by this run (index files, `deleted_` markers);
 - `moved`: files moved to the backup folder, plus backups of `archived-sessions.idx` taken before it was rewritten.
 
-`--undo` deletes the created files, moves backups back into place, and renames the journal to `.undone`. Run `--undo` repeatedly to step back through runs, newest first.
+`--undo` deletes the created files, moves backups back into place, and renames the journal to `.undone`. Run `--undo` repeatedly to step back through runs, newest first. In a terminal it first shows when the last run happened and how many files it touched, and asks before undoing.
 
 Undo only touches files the tool itself changed, never the desktop app's existing sessions. Like `--apply`, `--undo` requires the desktop app to be fully quit.
 

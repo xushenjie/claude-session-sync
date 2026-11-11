@@ -7,6 +7,11 @@ from claude_session_sync import __version__, cli
 from .fakes import ACCT, ORG, ORG_EMPTY
 
 
+def squash(text):
+    """把连续空白合成一个空格，断言时不受列对齐影响。"""
+    return " ".join(text.split())
+
+
 def cli_ids(entries):
     return sorted(e["cliSessionId"] for e in entries)
 
@@ -486,7 +491,7 @@ def test_heading_shows_masked_cli_account(env, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[al***@example.com · current CLI login] (aaaaaaaa…/bbbbbbbb…)" in out
     assert "alice@example.com" not in out  # 完整邮箱不能出现，组织名里的也不行
-    assert "[aaaaaaaa…/bbbbbbbb…] existing 0" in out  # 另一个组织没有名称
+    assert "[aaaaaaaa…/bbbbbbbb…] existing 0" in squash(out)  # 另一个组织没有名称
     assert not env.journal.exists()  # 预览不写账号记录
 
 
@@ -511,8 +516,8 @@ def test_set_alias_and_remove(env, capsys):
     capsys.readouterr()
     env.run()
     out = capsys.readouterr().out
-    assert "[work] (aaaaaaaa…/bbbbbbbb…) existing 1" in out
-    assert "[side] (aaaaaaaa…/bbbbbbbb…) existing 0" in out
+    assert "[work] (aaaaaaaa…/bbbbbbbb…) existing 1" in squash(out)
+    assert "[side] (aaaaaaaa…/bbbbbbbb…) existing 0" in squash(out)
     env.run("--set-alias", "aaaaaaaa=")
     saved = json.loads((env.journal / "accounts.json").read_text())
     assert ACCT not in saved["aliases"] and f"{ACCT}/{ORG_EMPTY}" in saved["aliases"]
@@ -544,3 +549,241 @@ def test_ambiguous_account_prefix_is_rejected(env):
     with pytest.raises(SystemExit) as e:
         env.run("--account", "aaaaaaaa")
     assert "matches several accounts" in str(e.value.code)
+
+
+# ---------------------------------------------------------------- 输出与交互
+
+
+def fake_terminal(monkeypatch, answers):
+    """假装在终端里运行，依次返回 answers 作为用户输入。"""
+    it = iter(answers)
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(cli, "_input", lambda prompt="": next(it))
+
+
+def test_sessions_listed_once_across_accounts(env, capsys):
+    env.add_index("existing")
+    env.add_index("existing", org=ORG_EMPTY)
+    env.add_cli_session("new-1", text="unique title here")
+    env.run()
+    out = capsys.readouterr().out
+    assert out.count("unique title here") == 1
+    assert "all accounts" in out
+    assert "add 1 session(s) (2 index file(s) in 2 account(s))" in out
+
+
+def test_long_list_is_capped_unless_verbose(env, capsys):
+    env.add_index("existing")
+    for i in range(cli.LIST_LIMIT + 3):
+        env.add_cli_session(f"s-{i:02d}", text=f"task {i:02d}")
+    env.run()
+    assert "and 3 more (pass -v to list all)" in capsys.readouterr().out
+    env.run("-v")
+    out = capsys.readouterr().out
+    assert "more (pass -v" not in out and "task 22" in out and "s-22" in out
+
+
+def test_quiet_prints_only_summary(env, capsys):
+    env.add_index("existing")
+    env.add_cli_session("new-1", text="secret title")
+    env.run("-q")
+    out = capsys.readouterr().out
+    assert "secret title" not in out and "Accounts" not in out
+    assert "add 1 session(s)" in out
+
+
+def test_in_sync_message(env, capsys):
+    env.add_index("existing")
+    env.add_cli_session("existing")
+    env.run()
+    out = capsys.readouterr().out
+    assert "Everything is in sync" in out and "Preview only" not in out
+
+
+def test_json_output(env, capsys):
+    env.add_index("existing")
+    env.add_cli_session("new-1", text="fix the bug")
+    env.run("--json")
+    data = json.loads(capsys.readouterr().out)
+    assert data["mode"] == "preview" and data["written"] is None
+    assert [s["id"] for s in data["sessions"]] == ["new-1"]
+    assert data["accounts"][0]["to_add"] == ["new-1"]
+    env.run("--json", "--apply")
+    data = json.loads(capsys.readouterr().out)
+    assert data["mode"] == "apply" and data["written"]["created"] == 1
+    assert cli_ids(env.index_entries()) == ["existing", "new-1"]
+
+
+def test_json_never_prompts(env, monkeypatch, capsys):
+    fake_terminal(monkeypatch, [])  # 一旦提问就会 StopIteration
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run("--json")
+    assert json.loads(capsys.readouterr().out)["mode"] == "preview"
+
+
+def test_no_color_when_not_a_terminal(env, capsys):
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run()
+    assert "\033[" not in capsys.readouterr().out
+    env.run("--color", "always")
+    assert "\033[" in capsys.readouterr().out
+
+
+def test_ascii_fallback_and_width_helpers(monkeypatch):
+    monkeypatch.setattr(cli, "_UNICODE", False)
+    assert cli.sym("ok") == "OK" and cli.sym("ell") == "..."
+    monkeypatch.setattr(cli, "_UNICODE", True)
+    assert cli.disp_width("中文ab") == 6
+    assert cli.fit("中文中文中文", 7) == "中文中…"
+    assert cli.disp_width(cli.fit("中文中文中文", 7)) <= 7
+    assert cli.pad("中", 4) == "中  "
+
+
+def test_short_path(monkeypatch):
+    monkeypatch.setattr(cli, "HOME", cli.Path("/home/u"))
+    assert cli.short_path("/home/u/work") == "~/work"
+    assert cli.short_path("/home/user2") == "/home/user2"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("", [0, 1, 2, 3, 4]),
+        ("all", [0, 1, 2, 3, 4]),
+        ("1-3", [0, 1, 2]),
+        ("3-1, 5", [0, 1, 2, 4]),
+        ("!2", [0, 2, 3, 4]),
+        ("1-4 !2", [0, 2, 3]),
+        ("none", []),
+        ("6", None),
+        ("0", None),
+        ("abc", None),
+    ],
+)
+def test_parse_selection(text, expected):
+    assert cli.parse_selection(text, 5) == expected
+
+
+def test_preview_then_confirm_writes(env, monkeypatch, capsys):
+    fake_terminal(monkeypatch, ["y"])
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing", "new-1"]
+    assert "Created 1 file(s)" in capsys.readouterr().out
+
+
+def test_preview_then_decline_writes_nothing(env, monkeypatch, capsys):
+    fake_terminal(monkeypatch, [""])  # 回车 = 默认 N
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing"]
+    assert not env.journal.exists()
+    assert "Nothing was written." in capsys.readouterr().out
+
+
+def test_no_input_flag_never_prompts(env, monkeypatch, capsys):
+    fake_terminal(monkeypatch, [])
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run("--no-input")
+    assert "Preview only" in capsys.readouterr().out
+
+
+def test_waits_for_desktop_to_quit(env, monkeypatch, capsys):
+    running = iter([True, False])
+    monkeypatch.setattr(cli, "desktop_running", lambda: next(running))
+    fake_terminal(monkeypatch, [""])  # 提示退出桌面端后按回车
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run("--apply")
+    assert cli_ids(env.index_entries()) == ["existing", "new-1"]
+    assert "press Enter to retry" in capsys.readouterr().out
+
+
+def test_cancel_while_desktop_running(env, monkeypatch):
+    monkeypatch.setattr(cli, "desktop_running", lambda: True)
+    fake_terminal(monkeypatch, ["q"])
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    with pytest.raises(SystemExit) as e:
+        env.run("--apply")
+    assert "Cancelled" in str(e.value.code)
+    assert cli_ids(env.index_entries()) == ["existing"]
+
+
+def test_purge_needs_typed_yes_in_terminal(env, monkeypatch, capsys):
+    arch = env.add_index("old", archived=True)
+    env.add_index("keep")
+    env.add_cli_session("new-1")
+    fake_terminal(monkeypatch, ["y"])  # --apply 不再问"现在写入"，"y" 不等于 "yes"
+    env.run("--purge-archived", "--apply")
+    assert arch.exists()
+    assert cli_ids(env.index_entries()) == ["keep", "new-1", "old"]  # 同步照常进行
+    assert "Purge skipped" in capsys.readouterr().out
+    fake_terminal(monkeypatch, ["yes"])
+    env.run("--purge-archived", "--apply")
+    assert not arch.exists()
+
+
+def test_interactive_pick_and_remember(env, monkeypatch, capsys):
+    import time
+
+    env.add_index("existing")
+    env.add_cli_session("older", text="older task", mtime=time.time() - 7200)
+    env.add_cli_session("newer", text="newer task")
+    # 会话按最后活动时间倒序：两个会话时间戳相同时按扫描顺序，所以只挑第 1 个并记住另一个
+    fake_terminal(monkeypatch, ["1", "y", "y"])
+    env.run("-i")
+    added = set(cli_ids(env.index_entries())) - {"existing"}
+    assert len(added) == 1
+    remembered = cli.read_exclude_file(cli.default_exclude_file())
+    assert remembered == {"older", "newer"} - added
+    # 下次运行自动跳过记住的会话
+    capsys.readouterr()
+    env.run()
+    assert "Everything is in sync" in capsys.readouterr().out
+
+
+def test_interactive_cancel(env, monkeypatch):
+    fake_terminal(monkeypatch, ["q"])
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    with pytest.raises(SystemExit):
+        env.run("-i")
+    assert cli_ids(env.index_entries()) == ["existing"]
+
+
+def test_interactive_requires_terminal(env):
+    env.add_index("existing")
+    with pytest.raises(SystemExit) as e:
+        env.run("-i")
+    assert "--interactive needs a terminal" in str(e.value.code)
+
+
+def test_undo_asks_first_in_terminal(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run("--apply")
+    fake_terminal(monkeypatch, ["n"])
+    cli.main(["--undo"])
+    assert cli_ids(env.index_entries()) == ["existing", "new-1"]
+    assert "Most recent run" in capsys.readouterr().out
+    fake_terminal(monkeypatch, ["y"])
+    cli.main(["--undo"])
+    assert cli_ids(env.index_entries()) == ["existing"]
+
+
+def test_exclude_file_comments_and_missing(env, tmp_path):
+    f = tmp_path / "ex.txt"
+    f.write_text("new-1  # some title\n\n# comment\n", encoding="utf-8")
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run("--apply", "--exclude-file", str(f))
+    assert cli_ids(env.index_entries()) == ["existing"]
+    with pytest.raises(SystemExit) as e:
+        env.run("--exclude-file", str(tmp_path / "nope.txt"))
+    assert "Exclude file not found" in str(e.value.code)
