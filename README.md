@@ -106,7 +106,7 @@ Output is in English, or in Chinese when your locale (`LC_ALL` / `LC_MESSAGES` /
 Run it with no options in a terminal and everything else is a key press away: the preview ends with a menu, and options you leave without a value open a list to pick from. A preview looks like this (made-up data):
 
 ```text
-╭─ claude-session-sync 0.3.2 ──────────────────────────────────────────────────────╮
+╭─ claude-session-sync 0.4.0 ──────────────────────────────────────────────────────╮
 │ CLI sessions 4  ·  accounts 3  ·  archived/deleted 1                             │
 ╰──────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Accounts ───────────────────────────────────────────────────────────────────────╮
