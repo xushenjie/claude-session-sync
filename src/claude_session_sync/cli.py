@@ -331,6 +331,7 @@ def render_cell(c, width, align="l"):
 
 def render_line(parts, width):
     """把一行里的若干 (cell, 宽度或 None) 依次拼起来；宽度为 None 的部分占满剩余宽度。"""
+    assert sum(w is None for _, w in parts) <= 1, "render_line: at most one flexible part"
     fixed = sum(w for _, w in parts if w is not None) + 2 * (len(parts) - 1)
     out = []
     for c, w in parts:
@@ -2151,16 +2152,13 @@ class SyncReport:
                     f"{len(idx_hits)} index file(s), {len(cli_hits)} CLI file(s)",
                     f"索引 {len(idx_hits)} 个 · CLI 文件 {len(cli_hits)} 个",
                 )
-                lines.append(
-                    render_line(
-                        [
-                            (cell(sym("minus"), "red"), 1),
-                            (cell(str(title)), None),
-                            (cell(f"{files}  {cid[:8]}", "dim"), None),
-                        ],
-                        inner,
-                    )
-                )
+                info = f"{files}  {cid[:8]}"
+                parts = [
+                    (cell(sym("minus"), "red"), 1),
+                    (cell(str(title)), None),
+                    (cell(info, "dim"), disp_width(info)),
+                ]
+                lines.append(render_line(parts, inner))
             if limit and len(plan) > limit:
                 lines.append(muted(self.more_text(len(plan) - limit)))
         lines += [muted(f"{sym('tip')} {x}") for x in self.purge_notes() for x in [fit(x, inner - 2)]]
@@ -2873,7 +2871,7 @@ Notes:
         "-i",
         "--interactive",
         action="store_true",
-        help=t("pick accounts and sessions from a numbered list before writing", "写入前从编号列表里挑选账号和会话"),
+        help=t("pick accounts and sessions from a list before writing", "写入前从列表里挑选账号和会话"),
     )
     common.add_argument(
         "-p",

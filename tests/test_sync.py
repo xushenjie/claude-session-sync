@@ -1486,3 +1486,14 @@ def test_apply_and_interactive_skip_hub(env, monkeypatch, capsys):
     press(monkeypatch)
     env.run("-a")
     assert "What next?" not in capsys.readouterr().out
+
+
+def test_boxed_purge_panel_is_aligned(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "80")
+    env.add_index("old", archived=True)
+    env.add_cli_session("old", text="an archived session")
+    env.add_index("keep")
+    env.run("--layout", "boxed", "--purge-archived")
+    lines = [line for line in capsys.readouterr().out.splitlines() if line and line[0] in "╭│├╰"]
+    assert any("title of old" in line for line in lines)  # 清除列表显示索引里记录的标题
+    assert all(cli.disp_width(line) == 80 for line in lines)
