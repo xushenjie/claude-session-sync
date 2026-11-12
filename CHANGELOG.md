@@ -7,11 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- `--icons symbols|emoji|ascii` (also `icons` in `config.toml`) picks the status icons.
 - In a terminal, the preview ends with a menu instead of "Write now? [y/N]": Enter writes, `2` picks accounts and sessions first, `3` undoes the most recent write, `q` quits.
 - Questions come up when they matter: a terminal run asks whether to sync sessions written in the last 2 minutes, and offers to purge archived sessions when you write. `--[no-]include-recent` and `--[no-]purge-archived` answer in advance.
 - `~/.claude-desktop-sync/config.toml` holds defaults for `lang`, `color`, `purge_archived`, `include_recent` and `per_account_archive`; `--save-defaults` saves the current run's values.
 
 ### Changed
+- Clearer output: a one-line header with the key counts; an aligned account table with status icons, a `★` on the current CLI login, ID prefixes, and a notes column explaining why counts differ (archived, excluded, running, orphaned index entries, command-only sessions); sessions grouped by working directory with aligned titles; colors with fixed meanings (green done, cyan to add, yellow attention, red delete); a colored menu; a short summary after writing; and dim tips when everything is in sync.
 - Pressing Enter after the preview now writes; type `q` or `n` to leave without writing.
 
 ### Fixed
