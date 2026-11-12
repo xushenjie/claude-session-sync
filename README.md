@@ -206,34 +206,59 @@ per_account_archive = false
 
 ## Options
 
+Run `claude-session-sync -h` for the same list, grouped the same way, with common commands at the top.
+
+**Common**
+
 | Option | Description |
 |---|---|
-| `-h`, `--help` | Show help, examples, and caveats |
-| `-V`, `--version` | Show the version |
+| (no options) | Preview; in a terminal a menu follows |
+| `-a`, `--apply` | Actually write |
+| `-i`, `--interactive` | Pick accounts and sessions from numbered lists before writing (terminal only) |
+| `-p`, `--[no-]purge-archived` | Permanently delete (or never delete) archived sessions after syncing (see above). Unset: offered in a terminal when there are any |
+| `-r`, `--[no-]include-recent` | Also sync (or never sync) sessions written in the last 2 minutes (possibly still running). They are marked in the output; purging still skips them. Unset: asked in a terminal |
+| `-u`, `--undo` | Undo the most recent write or deletion |
 | `--lang en\|zh` | Output language; overrides `CLAUDE_SESSION_SYNC_LANG`, `config.toml`, and the locale |
-| (no options) | Preview mode |
-| `--apply` | Actually write |
-| `--undo` | Undo the most recent write or deletion |
-| `--show-template` | Print each account's template fields and exit (for troubleshooting) |
+| `--save-defaults` | Save this run's `--lang`, `--color`, `--icons`, and the `--[no-]…` options to `config.toml`, then continue |
+
+**Accounts and filters**
+
+| Option | Description |
+|---|---|
 | `--account <account-id>` | Only sync this account. A prefix such as the 8 characters in the output is enough; add `/<org-id-prefix>` to pick one organization. Repeatable |
 | `--set-alias <id>=<name>` | Give an account a display name (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)); an empty name removes it. Repeatable; exits after saving |
 | `--project <string>` | Only handle sessions whose working directory contains this string (sync and purge) |
 | `--exclude <session-id>` | Exclude a session from sync and purge; repeatable |
 | `--exclude-file <file>` | Read excluded session IDs from a file, one per line; text after `#` is a comment. `~/.claude-desktop-sync/exclude.txt` is always read as well |
-| `--[no-]include-recent` | Also sync (or never sync) sessions written in the last 2 minutes (possibly still running). They are marked in the output; purging still skips them. Unset: asked in a terminal |
-| `--[no-]per-account-archive` | Only exclude sessions archived in the same account |
-| `--[no-]purge-archived` | Permanently delete (or never delete) archived sessions after syncing (see above). Unset: offered in a terminal when there are any |
-| `--save-defaults` | Save this run's `--lang`, `--color`, `--icons`, and the `--[no-]…` options above to `config.toml`, then continue |
-| `--projects-dir <path>` | CLI sessions directory; defaults to `~/.claude/projects` and honors `CLAUDE_CONFIG_DIR` |
-| `--desktop-root <path>` | Path to a `claude-code-sessions` directory; repeatable |
-| `--force` | Run `--apply` or `--undo` even while the desktop app is running (not recommended; the app may overwrite the changes) |
-| `-i`, `--interactive` | Pick accounts and sessions from numbered lists before writing (terminal only) |
-| `--no-input` | Never ask questions, even in a terminal |
+
+**Output**
+
+| Option | Description |
+|---|---|
 | `-q`, `--quiet` | Only print the summary and warnings |
 | `-v`, `--verbose` | List every session, with session IDs and extra statistics |
 | `--json` | Print the result as JSON; implies `--no-input` and no colors |
-| `--icons symbols\|emoji\|ascii` | Status icons: `✓ ↓ ⚠` (default), emoji, or plain ASCII |
+| `--no-input` | Never ask questions, even in a terminal |
 | `--color auto\|always\|never` | Colored output; `auto` (default) only colors a terminal and honors `NO_COLOR` |
+| `--icons symbols\|emoji\|ascii` | Status icons: `✓ ↓ ⚠` (default), emoji, or plain ASCII |
+
+**Advanced**
+
+| Option | Description |
+|---|---|
+| `--[no-]per-account-archive` | Only exclude sessions archived in the same account |
+| `--force` | Run `--apply` or `--undo` even while the desktop app is running (not recommended; the app may overwrite the changes) |
+| `--projects-dir <path>` | CLI sessions directory; defaults to `~/.claude/projects` and honors `CLAUDE_CONFIG_DIR` |
+| `--desktop-root <path>` | Path to a `claude-code-sessions` directory; repeatable |
+| `--show-template` | Print each account's template fields and exit (for troubleshooting) |
+
+**Other**
+
+| Option | Description |
+|---|---|
+| `--completion zsh` | Print a zsh completion script and exit (see [Shell completion](https://github.com/xushenjie/claude-session-sync#shell-completion)) |
+| `-h`, `--help` | Show help, common commands, and caveats |
+| `-V`, `--version` | Show the version |
 
 Examples:
 
@@ -246,6 +271,25 @@ claude-session-sync --exclude-file ~/no-sync.txt --apply
 ```
 
 A session ID is the file name of a `.jsonl` under `~/.claude/projects/<project>/`. An account ID is a top-level directory name under `claude-code-sessions/`; the preview shows the first 8 characters, which `--account` and `--set-alias` accept as-is.
+
+### Shell completion
+
+zsh can complete options and their values (`--icons <Tab>` lists `symbols emoji ascii`, file options complete paths). Add this to `~/.zshrc`, after `compinit`:
+
+```bash
+eval "$(claude-session-sync --completion zsh)"
+```
+
+If you run it through an alias (for example straight from a checkout), turn on `complete_aliases` and point the alias at the same completion:
+
+```bash
+setopt complete_aliases
+alias css='python3 ~/Projects/claude-session-sync/src/claude_session_sync/cli.py'
+eval "$(css --completion zsh)"
+compdef css=claude-session-sync
+```
+
+Without `complete_aliases`, zsh expands the alias first and completes `python3`'s arguments instead.
 
 ### Account names
 

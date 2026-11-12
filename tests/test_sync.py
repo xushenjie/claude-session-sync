@@ -1046,3 +1046,67 @@ def test_write_summary_and_tips(env, capsys):
     env.run()
     out = capsys.readouterr().out
     assert "Everything is in sync" in out and "last write" in out and "--save-defaults" in out
+
+
+# ---------------------------------------------------------------- 帮助、短参数、补全
+
+
+def test_help_groups_and_examples(monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "80")
+    with pytest.raises(SystemExit):
+        cli.main(["--lang", "zh", "-h"])
+    out = capsys.readouterr().out
+    order = [out.index(x) for x in ("常用命令", "常用:", "账号与筛选:", "输出:", "高级选项:", "其他:")]
+    assert order == sorted(order)
+    assert out.index("--show-template") > out.index("高级选项:")  # 少用的参数在后面
+    assert out.index("-a, --apply") < out.index("--account")
+    assert all(cli.disp_width(line) <= 80 for line in out.splitlines())  # 中文也不超出终端宽度
+    assert "--[no-]purge-archived" in out  # 不在连字符处断开参数名
+    with pytest.raises(SystemExit):
+        cli.main(["--lang", "en", "-h"])
+    assert all(cli.disp_width(line) <= 80 for line in capsys.readouterr().out.splitlines())
+
+
+def test_wrap_display():
+    assert cli.wrap_display("中文中文中文", 6) == ["中文中", "文中文"]
+    assert cli.wrap_display("aa --no-purge-archived bb", 12) == ["aa", "--no-purge-archived", "bb"]
+    assert cli.wrap_display("加 /<组织ID前缀>", 15) == ["加 /<组织ID前缀>"]  # 闭合符号不单独放到行首
+
+
+def test_short_flags(env, monkeypatch):
+    import time
+
+    arch = env.add_index("old", archived=True)
+    env.add_index("existing")
+    env.add_cli_session("busy", mtime=time.time())
+    fake_terminal(monkeypatch, ["yes"])  # -p 仍然要输入 yes 确认
+    env.run("-a", "-p", "-r")
+    assert cli_ids(env.index_entries()) == ["busy", "existing"]
+    assert not arch.exists()
+    fake_terminal(monkeypatch, ["y"])
+    env.run("-u")
+    assert arch.exists()
+
+
+def test_zsh_completion_script(capsys):
+    cli.main(["--lang", "en", "--completion", "zsh"])
+    out = capsys.readouterr().out
+    assert out.startswith("#compdef claude-session-sync")
+    assert "'(-a --apply)'{-a,--apply}" in out
+    assert "'(-q --quiet -v --verbose)'{-v,--verbose}" in out  # 互斥组
+    assert ":icons:(symbols emoji ascii)" in out
+    assert "--exclude-file[" in out and ":FILE:_files" in out
+    assert "'*--account[" in out  # 可重复的参数
+    assert "compdef _claude_session_sync claude-session-sync" in out
+
+
+def test_zsh_completion_parses(tmp_path, capsys):
+    import shutil
+    import subprocess
+
+    if not shutil.which("zsh"):
+        pytest.skip("zsh not installed")
+    cli.main(["--lang", "zh", "--completion", "zsh"])
+    script = tmp_path / "_css.zsh"
+    script.write_text(capsys.readouterr().out, encoding="utf-8")
+    subprocess.run(["zsh", "-n", str(script)], check=True)

@@ -206,34 +206,59 @@ per_account_archive = false
 
 ## 参数
 
+运行 `claude-session-sync -h` 可以看到同样分组的参数列表，开头是常用命令。
+
+**常用**
+
 | 参数 | 说明 |
 |---|---|
-| `-h`, `--help` | 显示帮助、示例和注意事项 |
-| `-V`, `--version` | 显示版本号 |
+| （不加参数） | 预览；在终端里随后给出菜单 |
+| `-a`, `--apply` | 实际写入 |
+| `-i`, `--interactive` | 写入前从编号列表里挑选账号和会话（只能在终端里用） |
+| `-p`, `--[no-]purge-archived` | 同步后彻底删除（或始终不删除）已归档会话（见上一节）。不指定时，在终端里发现可清除的会话会询问 |
+| `-r`, `--[no-]include-recent` | 同步（或始终不同步）最近 2 分钟内仍在写入的会话（可能正在运行），输出里会单独标出；清除时仍然跳过。不指定时在终端里询问 |
+| `-u`, `--undo` | 撤销最近一次写入或删除 |
 | `--lang en\|zh` | 输出语言，优先于 `CLAUDE_SESSION_SYNC_LANG`、`config.toml` 和系统语言 |
-| （不加参数） | 预览模式 |
-| `--apply` | 实际写入 |
-| `--undo` | 撤销最近一次写入或删除 |
-| `--show-template` | 显示每个账号的模板字段后退出（排查用） |
+| `--save-defaults` | 把本次的 `--lang`、`--color`、`--icons` 和几个 `--[no-]…` 参数保存到 `config.toml`，然后照常运行 |
+
+**账号与筛选**
+
+| 参数 | 说明 |
+|---|---|
 | `--account <账号ID>` | 只同步指定账号。写输出里显示的前 8 位就够了；加 `/<组织ID前缀>` 可以只选一个组织。可以写多次 |
 | `--set-alias <ID>=<名称>` | 给账号起显示名称（见[账号名称](#账号名称)），名称留空则删除。可以写多次，保存后退出 |
 | `--project <字符串>` | 只处理工作目录里包含这个字符串的会话（同步和清除都生效） |
 | `--exclude <会话ID>` | 排除某个会话，同步和清除都跳过，可以写多次 |
 | `--exclude-file <文件>` | 从文件读取排除列表，每行一个会话 ID，`#` 后面是注释。`~/.claude-desktop-sync/exclude.txt` 总是会一并读取 |
-| `--[no-]include-recent` | 同步（或始终不同步）最近 2 分钟内仍在写入的会话（可能正在运行），输出里会单独标出；清除时仍然跳过。不指定时在终端里询问 |
-| `--[no-]per-account-archive` | 只按当前账号的归档状态来排除 |
-| `--[no-]purge-archived` | 同步后彻底删除（或始终不删除）已归档会话（见上一节）。不指定时，在终端里发现可清除的会话会询问 |
-| `--save-defaults` | 把本次的 `--lang`、`--color`、`--icons` 和上面几个 `--[no-]…` 参数保存到 `config.toml`，然后照常运行 |
-| `--projects-dir <路径>` | CLI 会话目录，默认 `~/.claude/projects`，也会读取 `CLAUDE_CONFIG_DIR` |
-| `--desktop-root <路径>` | 手动指定 `claude-code-sessions` 目录，可以写多次 |
-| `--force` | 桌面端正在运行时也强制执行 `--apply` 或 `--undo`（不推荐，桌面端可能覆盖掉改动） |
-| `-i`, `--interactive` | 写入前从编号列表里挑选账号和会话（只能在终端里用） |
-| `--no-input` | 即使在终端里也不提问 |
+
+**输出**
+
+| 参数 | 说明 |
+|---|---|
 | `-q`, `--quiet` | 只输出汇总和提醒 |
 | `-v`, `--verbose` | 列出全部会话，并显示会话 ID 和更多统计 |
 | `--json` | 以 JSON 输出结果，同时不提问、不带颜色 |
+| `--no-input` | 即使在终端里也不提问 |
+| `--color auto\|always\|never` | 彩色输出；默认 `auto`，只在终端里启用，遵循 `NO_COLOR` |
 | `--icons symbols\|emoji\|ascii` | 状态图标：`✓ ↓ ⚠`（默认）、emoji 或纯 ASCII |
-| `--color auto\|always\|never` | 彩色输出；默认 `auto`，只在终端里启用，并遵循 `NO_COLOR` |
+
+**高级选项**
+
+| 参数 | 说明 |
+|---|---|
+| `--[no-]per-account-archive` | 只按当前账号的归档状态来排除 |
+| `--force` | 桌面端正在运行时也强制执行 `--apply` 或 `--undo`（不推荐，桌面端可能覆盖掉改动） |
+| `--projects-dir <路径>` | CLI 会话目录，默认 `~/.claude/projects`，也会读取 `CLAUDE_CONFIG_DIR` |
+| `--desktop-root <路径>` | 手动指定 `claude-code-sessions` 目录，可以写多次 |
+| `--show-template` | 显示每个账号的模板字段后退出（排查用） |
+
+**其他**
+
+| 参数 | 说明 |
+|---|---|
+| `--completion zsh` | 输出 zsh 补全脚本后退出（见 [Shell 补全](#shell-补全)） |
+| `-h`, `--help` | 显示帮助、常用命令和注意事项 |
+| `-V`, `--version` | 显示版本号 |
 
 示例：
 
@@ -246,6 +271,25 @@ claude-session-sync --exclude-file ~/no-sync.txt --apply
 ```
 
 会话 ID 就是 `~/.claude/projects/<项目>/` 下 `.jsonl` 文件的文件名；账号 ID 是 `claude-code-sessions/` 下第一层目录名，预览输出里会显示前 8 位，`--account` 和 `--set-alias` 直接用这 8 位就行。
+
+### Shell 补全
+
+zsh 可以补全参数和取值（`--icons <Tab>` 会列出 `symbols emoji ascii`，文件类参数会补全路径）。在 `~/.zshrc` 里 `compinit` 之后加上：
+
+```bash
+eval "$(claude-session-sync --completion zsh)"
+```
+
+如果通过别名运行（比如直接运行仓库里的源码），要打开 `complete_aliases`，并让别名使用同一套补全：
+
+```bash
+setopt complete_aliases
+alias css='python3 ~/Projects/claude-session-sync/src/claude_session_sync/cli.py'
+eval "$(css --completion zsh)"
+compdef css=claude-session-sync
+```
+
+不打开 `complete_aliases` 的话，zsh 会先把别名展开，结果补全的是 `python3` 的参数。
 
 ### 账号名称
 

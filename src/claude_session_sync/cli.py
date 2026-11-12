@@ -1640,165 +1640,169 @@ def ask_include_recent(sessions):
     return ok
 
 
-def main(argv=None):
-    use_safe_stdio()
-    cfg = load_config()
-    apply_lang_flag(argv, cfg)
+def wrap_display(text, width):
+    """按显示宽度折行：中文两格；在空格处或中文字符之间断开，不拆开 --no-xxx 这类参数名。"""
+    lines, line = [], ""
+    for token in re.findall(r"[\u2e80-\u9fff\uff00-\uffef]|[^\s\u2e80-\u9fff\uff00-\uffef]+|\s+", text):
+        if token.isspace():
+            token = " "
+        closing = re.fullmatch(r"[>)\]）】」』，。、；：！？]+", token)  # 行首不放闭合标点
+        if line and not closing and disp_width(line.rstrip() + token.rstrip()) > width:
+            lines.append(line.rstrip())
+            line = "" if token == " " else token
+        else:
+            line += token
+    if line.strip():
+        lines.append(line.rstrip())
+    return lines or [""]
+
+
+class HelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """参数说明按显示宽度折行，中文帮助不会超出终端宽度。"""
+
+    def __init__(self, prog):
+        super().__init__(prog, max_help_position=26, width=min(100, shutil.get_terminal_size((100, 24)).columns))
+
+    def _split_lines(self, text, width):
+        return wrap_display(" ".join(text.split()), width - 2)  # 留出行尾闭合标点的位置
+
+
+ZSH_FILE_ARGS = {"--exclude-file": "_files", "--projects-dir": "_directories", "--desktop-root": "_directories"}
+
+
+def zsh_completion(ap):
+    """根据参数定义生成 zsh 补全脚本：互斥的长短写法、取值列表、文件/目录参数都会补全。"""
+
+    def esc(text):
+        text = " ".join((text or "").split())
+        text = re.sub(r"[\[\]]", lambda m: "（" if m.group(0) == "[" else "）", text)
+        return text.replace("'", "'\\''").replace(":", "：")
+
+    peers = {}  # 互斥组里的其他参数，补全时也一并排除
+    for group in ap._mutually_exclusive_groups:
+        names = [o for a in group._group_actions for o in a.option_strings]
+        for a in group._group_actions:
+            peers[a.dest] = names
+    specs = []
+    for action in ap._actions:
+        opts = action.option_strings
+        if not opts or action.help == argparse.SUPPRESS:
+            continue
+        desc = esc(action.help).split("。")[0].split(". ")[0]
+        desc = fit(desc, 60)
+        if isinstance(action, argparse.BooleanOptionalAction):
+            pos = [o for o in opts if not o.startswith("--no-")]
+            neg = [o for o in opts if o.startswith("--no-")]
+            excl = " ".join(opts)
+            specs.append(
+                f"'({excl})'" + "{" + ",".join(pos) + "}" + f"'[{desc}]'"
+                if len(pos) > 1
+                else f"'({excl}){pos[0]}[{desc}]'"
+            )
+            specs.append(f"'({excl}){neg[0]}[{esc(t('do not', '不要'))} {pos[-1]}]'")
+            continue
+        repeat = isinstance(action, argparse._AppendAction)
+        excl = "" if repeat else "(" + " ".join(peers.get(action.dest, opts)) + ")"
+        if repeat:
+            excl = "*"
+        value = ""
+        if action.nargs != 0:
+            meta = action.metavar or action.dest
+            if action.choices:
+                value = f":{meta}:(" + " ".join(map(str, action.choices)) + ")"
+            else:
+                value = f":{meta}:{ZSH_FILE_ARGS.get(opts[-1], ' ')}"
+        if len(opts) > 1 and not repeat:
+            specs.append(f"'{excl}'" + "{" + ",".join(opts) + "}" + f"'[{desc}]{value}'")
+        else:
+            for o in opts:
+                specs.append(f"'{excl}{o}[{desc}]{value}'")
+    body = " \\\n    ".join(specs)
+    return f"""#compdef claude-session-sync
+# claude-session-sync zsh completion. Load it with:
+#   eval "$(claude-session-sync --completion zsh)"
+
+_claude_session_sync() {{
+  _arguments -s \\
+    {body}
+}}
+
+if (( $+functions[compdef] )); then
+  compdef _claude_session_sync claude-session-sync
+fi
+"""
+
+
+def build_parser():
+    """命令行参数。按用途分组，常用的放前面；--help 开头先给几个常用例子。"""
     ap = argparse.ArgumentParser(
         prog="claude-session-sync",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        usage=t("%(prog)s [options]", "%(prog)s [选项]"),
+        add_help=False,
+        formatter_class=HelpFormatter,
         description=t(
-            "Sync local Claude Code CLI sessions into the Claude desktop app's Code sidebar (multi-account).\n"
-            "Archived sessions and sessions deleted in the desktop app are skipped. "
-            "Previews by default; pass --apply to write.\n"
-            # 这一行固定用中文：给终端设成英文的中文用户看
-            "中文输出：加 --lang zh，或设置环境变量 CLAUDE_SESSION_SYNC_LANG=zh",
-            "把本地 Claude Code CLI 会话同步到 Claude 桌面端 Code 标签页的侧边栏（支持多账号）。\n"
-            "自动排除已归档、桌面端已删除的会话。默认只预览，加 --apply 才写入。\n"
-            "English output: pass --lang en, or set CLAUDE_SESSION_SYNC_LANG=en",
+            """\
+Sync local Claude Code CLI sessions into the Claude desktop app's Code sidebar,
+for every account. Skips archived and deleted sessions. Previews by default.
+中文输出：加 --lang zh，或设置环境变量 CLAUDE_SESSION_SYNC_LANG=zh
+
+Common commands:
+  %(prog)s          preview, then a menu in a terminal (Enter writes)
+  %(prog)s -a       write without asking (quit the desktop app first)
+  %(prog)s -i       pick accounts and sessions, then write
+  %(prog)s -a -p    write, then delete archived sessions (undoable)
+  %(prog)s -u       undo the most recent write""",
+            """\
+把本地 Claude Code CLI 会话同步到 Claude 桌面端 Code 标签页的侧边栏（多账号）。
+自动排除已归档、桌面端已删除的会话。默认只预览。
+English output: pass --lang en, or set CLAUDE_SESSION_SYNC_LANG=en
+
+常用命令：
+  %(prog)s          预览；在终端里随后给出菜单（回车即写入）
+  %(prog)s -a       不询问直接写入（先 ⌘Q 彻底退出桌面端）
+  %(prog)s -i       从列表里挑选账号和会话后写入
+  %(prog)s -a -p    写入后彻底删除已归档会话（可撤销）
+  %(prog)s -u       撤销最近一次写入""",
         ),
         epilog=t(
             """\
-Typical workflow:
-  %(prog)s                          preview what each account would get (in a terminal, then a menu)
-  %(prog)s -i                       pick accounts and sessions from a list, then write
-  %(prog)s --apply                  write (quit the desktop app completely first, e.g. ⌘Q)
-  %(prog)s --undo                   undo the most recent write/purge
-
-Examples:
-  %(prog)s --account <account-id> --project myapp --apply
-                                    sync only the myapp project into one account
-  %(prog)s --exclude-file ~/no-sync.txt --apply
-                                    leave out the sessions listed in a file
-  %(prog)s --purge-archived         preview which archived sessions would be deleted
-  %(prog)s --purge-archived --apply sync, then permanently delete archived sessions (undoable)
-
 Notes:
   * Quit the desktop app completely before writing, and reopen it afterwards.
-  * Journals and backups live in ~/.claude-desktop-sync/; --undo steps back one run at a time.
+  * Journals and backups live in ~/.claude-desktop-sync/; --undo steps back one
+    run at a time.
+  * Defaults live in ~/.claude-desktop-sync/config.toml (lang, color, icons,
+    purge_archived, include_recent, per_account_archive); --save-defaults saves
+    the current options. If purge_archived or include_recent is unset, a
+    terminal run asks each time it matters.
+  * Output language: --lang, CLAUDE_SESSION_SYNC_LANG, config.toml, the locale.
   * The desktop index format is undocumented and may break with desktop updates.
-  * Output language: --lang, then CLAUDE_SESSION_SYNC_LANG, then config.toml, then LC_ALL / LC_MESSAGES / LANG.
-  * Defaults live in ~/.claude-desktop-sync/config.toml (lang, color, purge_archived, include_recent,
-    per_account_archive); save the current options with --save-defaults. When purge_archived or
-    include_recent is unset, a terminal run asks each time it matters.
 """,
             """\
-常用流程：
-  %(prog)s                          预览每个账号会补哪些会话（在终端里随后给出菜单）
-  %(prog)s -i                       从列表里挑选账号和会话后写入
-  %(prog)s --apply                  写入（先 ⌘Q 彻底退出桌面端）
-  %(prog)s --undo                   撤销最近一次写入/删除
-
-示例：
-  %(prog)s --account <账号ID> --project myapp --apply
-                                    只把 myapp 项目同步到指定账号
-  %(prog)s --exclude-file ~/no-sync.txt --apply
-                                    排除列表中的会话
-  %(prog)s --purge-archived         预览会被彻底删除的已归档会话
-  %(prog)s --purge-archived --apply 同步后彻底删除已归档会话（可 --undo）
-
 注意：
   * 写入前请彻底退出桌面端（菜单栏 ⌘Q），写完重新打开。
   * 日志与备份在 ~/.claude-desktop-sync/，--undo 按时间倒序逐次撤销。
+  * 默认设置在 ~/.claude-desktop-sync/config.toml（lang、color、icons、
+    purge_archived、include_recent、per_account_archive），
+    可以用 --save-defaults 保存当前参数。
+    purge_archived、include_recent 没设置时，在终端里遇到相关情况会当场询问。
+  * 输出语言：依次看 --lang、CLAUDE_SESSION_SYNC_LANG、config.toml、系统语言。
   * 桌面端索引格式无官方文档，桌面端更新后可能失效。
-  * 输出语言：依次看 --lang、CLAUDE_SESSION_SYNC_LANG、config.toml、LC_ALL / LC_MESSAGES / LANG。
-  * 默认设置在 ~/.claude-desktop-sync/config.toml（lang、color、purge_archived、include_recent、
-    per_account_archive），可以用 --save-defaults 保存当前参数。purge_archived、include_recent
-    没设置时，在终端里遇到相关情况会当场询问。
 """,
         ),
     )
-    ap.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
-    ap.add_argument(
-        "--lang",
-        choices=["en", "zh"],
-        help=t(
-            "output language (default: from CLAUDE_SESSION_SYNC_LANG or the locale)",
-            "输出语言（默认：按 CLAUDE_SESSION_SYNC_LANG 或系统语言）",
-        ),
+
+    common = ap.add_argument_group(t("Common", "常用"))
+    common.add_argument(
+        "-a", "--apply", action="store_true", help=t("actually write (default: preview only)", "实际写入（默认只预览）")
     )
-    ap.add_argument(
-        "--apply", action="store_true", help=t("actually write (default: preview only)", "实际写入（默认只预览）")
-    )
-    ap.add_argument("--undo", action="store_true", help=t("undo the most recent write", "撤销最近一次写入"))
-    ap.add_argument(
-        "--show-template",
+    common.add_argument(
+        "-i",
+        "--interactive",
         action="store_true",
-        help=t("print each account's template fields and exit", "显示各账号模板字段后退出"),
+        help=t("pick accounts and sessions from a numbered list before writing", "写入前从编号列表里挑选账号和会话"),
     )
-    ap.add_argument(
-        "--account",
-        action="append",
-        help=t(
-            "only sync this account; an ID prefix such as the 8 characters shown in the output works, "
-            "add /<org-id-prefix> to pick one organization (repeatable)",
-            "只同步指定账号；可以只写输出里显示的前 8 位，加 /<组织ID前缀> 可只选一个组织（可多次使用）",
-        ),
-    )
-    ap.add_argument(
-        "--set-alias",
-        action="append",
-        metavar="ID=NAME",
-        help=t(
-            "give an account a display name, e.g. b8073c71=work (ID prefix, optionally /<org-id-prefix>); "
-            "an empty name removes it; repeatable, then exits",
-            "给账号起显示名称，如 b8073c71=工作号（ID 前缀，可加 /<组织ID前缀>）；名称留空则删除；可多次使用，设置完即退出",
-        ),
-    )
-    ap.add_argument(
-        "--project",
-        help=t(
-            "only handle sessions whose working directory contains this string (sync and purge)",
-            "只处理工作目录包含该字符串的会话（同步和清除都生效）",
-        ),
-    )
-    ap.add_argument(
-        "--exclude",
-        action="append",
-        default=[],
-        help=t("session ID to skip in sync and purge (repeatable)", "排除的会话ID，同步和清除都跳过（可多次使用）"),
-    )
-    ap.add_argument(
-        "--exclude-file",
-        help=t("file with session IDs to exclude, one per line", "排除列表文件，每行一个会话ID"),
-    )
-    ap.add_argument(
-        "--include-recent",
-        action=argparse.BooleanOptionalAction,
-        help=t(
-            "also sync sessions written in the last 2 minutes (possibly still running); "
-            "--purge-archived still skips them. Unset: ask in a terminal",
-            "同步时不跳过最近 2 分钟内仍在写入的会话（可能正在运行）；--purge-archived 仍然会跳过。"
-            "不指定时在终端里询问",
-        ),
-    )
-    ap.add_argument(
-        "--per-account-archive",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=t(
-            "only exclude sessions archived in the same account (default: archived anywhere = excluded everywhere)",
-            "只按本账号的归档状态排除（默认：任一账号归档即全部排除）",
-        ),
-    )
-    ap.add_argument(
-        "--projects-dir",
-        help=t("CLI sessions directory (default: ~/.claude/projects)", "CLI 会话目录（默认 ~/.claude/projects）"),
-    )
-    ap.add_argument(
-        "--desktop-root",
-        action="append",
-        help=t("path to a claude-code-sessions directory (repeatable)", "手动指定 claude-code-sessions 目录"),
-    )
-    ap.add_argument(
-        "--force",
-        action="store_true",
-        help=t(
-            "run --apply / --undo even while the desktop app is running (not recommended)",
-            "桌面端运行中也强制执行 --apply / --undo（不推荐）",
-        ),
-    )
-    ap.add_argument(
+    common.add_argument(
+        "-p",
         "--purge-archived",
         action=argparse.BooleanOptionalAction,
         help=t(
@@ -1808,43 +1812,81 @@ Notes:
             "不指定时，在终端里发现已归档会话会询问",
         ),
     )
-    ap.add_argument(
+    common.add_argument(
+        "-r",
+        "--include-recent",
+        action=argparse.BooleanOptionalAction,
+        help=t(
+            "also sync sessions written in the last 2 minutes (possibly still running); "
+            "--purge-archived still skips them. Unset: ask in a terminal",
+            "同步时不跳过最近 2 分钟内仍在写入的会话（可能正在运行）；--purge-archived 仍然会跳过。"
+            "不指定时在终端里询问",
+        ),
+    )
+    common.add_argument("-u", "--undo", action="store_true", help=t("undo the most recent write", "撤销最近一次写入"))
+    common.add_argument(
+        "--lang",
+        choices=["en", "zh"],
+        help=t(
+            "output language (default: from CLAUDE_SESSION_SYNC_LANG, config.toml or the locale)",
+            "输出语言（默认：按 CLAUDE_SESSION_SYNC_LANG、config.toml 或系统语言）",
+        ),
+    )
+    common.add_argument(
         "--save-defaults",
         action="store_true",
         help=t(
-            "save --lang, --color, --icons, --[no-]purge-archived, --[no-]include-recent and --[no-]per-account-archive "
-            "of this run to ~/.claude-desktop-sync/config.toml, then continue",
-            "把本次的 --lang、--color、--icons、--[no-]purge-archived、--[no-]include-recent、--[no-]per-account-archive "
-            "保存到 ~/.claude-desktop-sync/config.toml 作为默认值，然后照常运行",
+            "save --lang, --color, --icons, --[no-]purge-archived, --[no-]include-recent and "
+            "--[no-]per-account-archive of this run to ~/.claude-desktop-sync/config.toml, then continue",
+            "把本次的 --lang、--color、--icons、--[no-]purge-archived、--[no-]include-recent、"
+            "--[no-]per-account-archive 保存到 ~/.claude-desktop-sync/config.toml 作为默认值，然后照常运行",
         ),
     )
-    ap.add_argument(
-        "-i",
-        "--interactive",
-        action="store_true",
+
+    pick = ap.add_argument_group(t("Accounts and filters", "账号与筛选"))
+    pick.add_argument(
+        "--account",
+        action="append",
+        metavar="ID",
         help=t(
-            "pick accounts and sessions from a numbered list before writing",
-            "写入前从编号列表里挑选账号和会话",
+            "only sync this account; an ID prefix such as the 8 characters shown in the output works, "
+            "add /<org-id-prefix> to pick one organization (repeatable)",
+            "只同步指定账号；可以只写输出里显示的前 8 位，加 /<组织ID前缀> 可只选一个组织（可多次使用）",
         ),
     )
-    ap.add_argument(
-        "--no-input",
-        action="store_true",
+    pick.add_argument(
+        "--set-alias",
+        action="append",
+        metavar="ID=NAME",
         help=t(
-            "never ask questions, even in a terminal (behaves like a script)",
-            "即使在终端里也不提问（和脚本里运行一样）",
+            "give an account a display name, e.g. b8073c71=work (ID prefix, optionally /<org-id-prefix>); "
+            "an empty name removes it; repeatable, then exits",
+            "给账号起显示名称，如 b8073c71=工作号（ID 前缀，可加 /<组织ID前缀>）；名称留空则删除；可多次使用，设置完即退出",
         ),
     )
-    ap.add_argument(
-        "--icons",
-        choices=["symbols", "emoji", "ascii"],
-        default="symbols",
+    pick.add_argument(
+        "--project",
+        metavar="TEXT",
         help=t(
-            "status icons: symbols (✓ ↓ ⚠, default), emoji (✅ 📥 ⚠️), or ascii",
-            "状态图标：symbols（✓ ↓ ⚠，默认）、emoji（✅ 📥 ⚠️）或 ascii",
+            "only handle sessions whose working directory contains this string (sync and purge)",
+            "只处理工作目录包含该字符串的会话（同步和清除都生效）",
         ),
     )
-    verbosity = ap.add_mutually_exclusive_group()
+    pick.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="SESSION_ID",
+        help=t("session ID to skip in sync and purge (repeatable)", "排除的会话ID，同步和清除都跳过（可多次使用）"),
+    )
+    pick.add_argument(
+        "--exclude-file",
+        metavar="FILE",
+        help=t("file with session IDs to exclude, one per line", "排除列表文件，每行一个会话ID"),
+    )
+
+    out = ap.add_argument_group(t("Output", "输出"))
+    verbosity = out.add_mutually_exclusive_group()
     verbosity.add_argument("-q", "--quiet", action="store_true", help=t("only print the summary", "只输出汇总"))
     verbosity.add_argument(
         "-v",
@@ -1852,15 +1894,22 @@ Notes:
         action="store_true",
         help=t("print every session and extra statistics", "列出全部会话和更多统计"),
     )
-    ap.add_argument(
+    out.add_argument(
         "--json",
         action="store_true",
         help=t(
-            "print the result as JSON (implies --no-input and no colors)",
-            "以 JSON 输出结果（同时不提问、不带颜色）",
+            "print the result as JSON (implies --no-input and no colors)", "以 JSON 输出结果（同时不提问、不带颜色）"
         ),
     )
-    ap.add_argument(
+    out.add_argument(
+        "--no-input",
+        action="store_true",
+        help=t(
+            "never ask questions, even in a terminal (behaves like a script)",
+            "即使在终端里也不提问（和脚本里运行一样）",
+        ),
+    )
+    out.add_argument(
         "--color",
         choices=["auto", "always", "never"],
         default="auto",
@@ -1869,8 +1918,82 @@ Notes:
             "彩色输出（默认 auto：只在终端里启用，遵循 NO_COLOR）",
         ),
     )
+    out.add_argument(
+        "--icons",
+        choices=["symbols", "emoji", "ascii"],
+        default="symbols",
+        help=t(
+            "status icons: symbols (✓ ↓ ⚠, default), emoji (✅ 📥 ⚠️), or ascii",
+            "状态图标：symbols（✓ ↓ ⚠，默认）、emoji（✅ 📥 ⚠️）或 ascii",
+        ),
+    )
+
+    adv = ap.add_argument_group(t("Advanced", "高级选项"))
+    adv.add_argument(
+        "--per-account-archive",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=t(
+            "only exclude sessions archived in the same account (default: archived anywhere = excluded everywhere)",
+            "只按本账号的归档状态排除（默认：任一账号归档即全部排除）",
+        ),
+    )
+    adv.add_argument(
+        "--force",
+        action="store_true",
+        help=t(
+            "run --apply / --undo even while the desktop app is running (not recommended)",
+            "桌面端运行中也强制执行 --apply / --undo（不推荐）",
+        ),
+    )
+    adv.add_argument(
+        "--projects-dir",
+        metavar="DIR",
+        help=t("CLI sessions directory (default: ~/.claude/projects)", "CLI 会话目录（默认 ~/.claude/projects）"),
+    )
+    adv.add_argument(
+        "--desktop-root",
+        action="append",
+        metavar="DIR",
+        help=t(
+            "path to a claude-code-sessions directory (repeatable)", "手动指定 claude-code-sessions 目录（可多次使用）"
+        ),
+    )
+    adv.add_argument(
+        "--show-template",
+        action="store_true",
+        help=t("print each account's template fields and exit", "显示各账号模板字段后退出"),
+    )
+    other = ap.add_argument_group(t("Other", "其他"))
+    other.add_argument(
+        "--completion",
+        choices=["zsh"],
+        help=t(
+            'print a shell completion script and exit, e.g. eval "$(claude-session-sync --completion zsh)"',
+            '输出 shell 补全脚本后退出，例如 eval "$(claude-session-sync --completion zsh)"',
+        ),
+    )
+    other.add_argument("-h", "--help", action="help", help=t("show this help and exit", "显示帮助后退出"))
+    other.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help=t("show the version and exit", "显示版本号后退出"),
+    )
+    return ap
+
+
+def main(argv=None):
+    use_safe_stdio()
+    cfg = load_config()
+    apply_lang_flag(argv, cfg)
+    ap = build_parser()
     ap.set_defaults(**cfg)
     args = ap.parse_args(argv)
+    if args.completion:
+        print(zsh_completion(ap), end="")
+        return
     setup_terminal("never" if args.json else args.color, args.icons)
     if args.save_defaults:
         saved = {k: getattr(args, k) for k in CONFIG_KEYS if getattr(args, k) is not None}
