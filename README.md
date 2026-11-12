@@ -85,7 +85,7 @@ If yours is elsewhere, pass it with `--desktop-root`.
 # Full help
 claude-session-sync --help
 
-# 1. Preview: list which sessions each account would get, write nothing
+# 1. Preview: list which sessions each account would get; the desktop app's data is not touched
 claude-session-sync
 
 # 2. Fully quit the desktop app (⌘Q on macOS; closing the window or "restart" is not enough), then write
@@ -107,27 +107,37 @@ Run it with no options in a terminal and everything else is a key press away: th
 
 ```text
 ╭─ claude-session-sync 0.4.0 ──────────────────────────────────────────────────────╮
-│ CLI sessions 4  ·  accounts 3  ·  archived/deleted 1                             │
+│ CLI sessions 4  ·  accounts 3  ·  orgs 4  ·  archived/deleted 1                  │
 ╰──────────────────────────────────────────────────────────────────────────────────╯
-╭─ Accounts ───────────────────────────────────────────────────────────────────────╮
-│   │ Name                   │ ID                │ existing │ to add │ notes       │
-├───┼────────────────────────┼───────────────────┼──────────┼────────┼─────────────┤
-│ ● │ work                   │ 1a2b3c4d/9f8e7d6c │        2 │     +2 │             │
-│ ● │ al***@example.com  CLI │ 5e6f7a8b/0c1d2e3f │        2 │     +1 │ −1 archived │
-│ ● │ 5e6f7a8b/9f8e7d6c      │                   │        2 │     +1 │ −1 archived │
-╰───┴────────────────────────┴───────────────────┴──────────┴────────┴─────────────╯
+
+╭─ Accounts ─────────────────────────────────────────────── 1 directory(ies) gone ─╮
+│ Account / organization           │ ID       │ existing │ this run                │
+├──────────────────────────────────┼──────────┼──────────┼─────────────────────────┤
+│ ● al***@example.com  current CLI │ 5e6f7a8b │          │                         │
+│   ├ ● personal org               │ 0c1d2e3f │        2 │ add 1 session(s) · −1 … │
+│   └ ● Acme Inc                   │ 9f8e7d6c │        2 │ add 1 session(s) · −1 … │
+│ ● work · dan***@example.com      │ 1a2b3c4d │          │                         │
+│   └ ● Acme Inc                   │ 9f8e7d6c │        2 │ add 2 session(s)        │
+│ ○ Old main · bo***@example.com   │ 7c8d9e0f │          │                         │
+│   └ ○ personal org               │ 1a2b3c4d │        – │ skip: directory gone    │
+╰──────────────────────────────────┴──────────┴──────────┴─────────────────────────╯
+
 ╭─ Sessions to add (2) ────────────────────────────────────────────────────────────╮
 │ ▸ ~/work/docs                                                                    │
-│   11-12 08:38  Draft release notes                                → work         │
+│   ◇ 2026-11-12 08:38  Draft release notes                         → work         │
 │ ▸ ~/work/webapp                                                                  │
-│   11-12 08:38  Fix login redirect                                 → all accounts │
+│   ◇ 2026-11-12 08:38  Fix login redirect                          → all accounts │
 ╰──────────────────────────────────────────────────────────────────────────────────╯
+
 ╭─ Archived sessions to purge (1) ─────────────────────────────────────────────────╮
 │ −  Old experiment                       1 index file(s), 1 CLI file(s)  4d5e6f70 │
 ╰──────────────────────────────────────────────────────────────────────────────────╯
+
 ╭─ Plan ───────────────────────────────────────────────────────────────────────────╮
-│ + add 2 session(s) (4 index file(s) in 3 account(s))                             │
+│ + add 2 session(s) (4 index file(s) in 3 organization(s))                        │
 │ − delete 1 archived session(s)                                                   │
+│ › 1 known organization directory no longer exists (signed out of the desktop     │
+│   app, or its data was cleared); sign in again there and run again to sync       │
 ╰──────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ What next? ───────────────────────────────── ↑↓ move · Enter select · Esc back ─╮
@@ -144,9 +154,13 @@ Run it with no options in a terminal and everything else is a key press away: th
 ╰──────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-- The header panel counts usable CLI sessions, desktop accounts, and sessions archived or deleted anywhere. In the account table a green `●` marks the current CLI login (its name is followed by `CLI`), a dim `●` the other accounts, and a yellow `⚠` an account with no template. The ID column gives the prefix for `--account`, and the **notes** column explains why counts differ: `−N archived` (archived or deleted in some account, so not added), `−N excluded`, `−N running`, `+N orphaned` (the index points to a transcript that no longer exists), `+N command-only/empty`.
-- Sessions are grouped by working directory (`▸`) and listed once, with the accounts they go to (`→`). Up to 20 are shown; `-v` lists all of them, plus session IDs and extra statistics. `-q` prints only the summary and warnings.
-- Panels fill the terminal up to 100 columns and shrink on narrow screens; long titles are cut with `…`. `--layout plain` (or `layout = "plain"` in `config.toml`) prints the same content without frames, which is also what pipes and files get by default. Terminals that can't show box-drawing characters, and `--icons ascii`, get ASCII frames.
+- The header panel counts usable CLI sessions, accounts, organization directories, and sessions archived or deleted anywhere.
+- The account table is a tree of **client → account → organization**: the desktop app keeps a directory for each organization of each account, so one account can have several organization rows. With more than one client (such as `Claude` and `Claude-3p`) each gets its own section, separated by a line.
+  - **Account rows** show the alias and masked email, with the first 8 characters of the account ID. A green `●` marks the account the CLI is signed in to (followed by `current CLI`, and always listed first), a dim `●` the other accounts, and a dim `○` an account none of whose organization directories exist any more.
+  - **Organization rows** hang under their account with `├` `└` and show the organization name and the first 8 characters of its ID. A personal organization (named "email's Organization") shows as `personal org`, or `<that account's name>'s personal org` when it belongs to another account, for example after being invited into someone's personal organization. Without a known name only the ID is shown.
+  - The **this run** column says what happens to the organization: `add N session(s)` (cyan; `borrows a template` when it uses another account's template), `in sync`, `skip: no template` (yellow `⚠`), `skip: directory gone` (see [Known accounts](https://github.com/xushenjie/claude-session-sync#known-accounts); `-v` adds when it was last seen) or `not processed (filtered out)` (an organization `--account` didn't select). Then come notes explaining why counts differ: `−N archived` (archived or deleted in some account, so not added), `−N excluded`, `−N running`, `+N orphaned` (the index points to a transcript that no longer exists), `+N command-only/empty`.
+- Sessions (`◇`, or `💬` with `--icons emoji`) are grouped by working directory (`▸`) and listed once, with their last activity time (always with the year) and the accounts they go to (`→`). Up to 20 are shown; `-v` lists all of them, plus session IDs and extra statistics. `-q` prints only the summary and warnings.
+- Panels are separated by a blank line, fill the terminal up to 100 columns and shrink on narrow screens; long titles are cut with `…`. `--layout plain` (or `layout = "plain"` in `config.toml`) prints the same content without frames, which is also what pipes and files get by default. Terminals that can't show box-drawing characters, and `--icons ascii`, get ASCII frames.
 
 ### The menu
 
@@ -159,6 +173,7 @@ When both input and output are a terminal, the preview always ends with the **Wh
 | `3` | Undo the most recent write (shown when there is one) |
 | `f` | Only some accounts or a project; the preview is rebuilt |
 | `n` | Name accounts (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)) |
+| `g` | Forget accounts whose directory is gone (shown when there are any) |
 | `x` | Exclude list: untick sessions to sync them again |
 | `s` | Defaults: language, colors, icons, layout, and the questions below, saved to `config.toml` |
 | `q` / Esc | Quit without writing |
@@ -182,7 +197,7 @@ If the terminal can't read single key presses (for example `TERM=dumb`), or `ui 
 
 ### Options without a value
 
-These options open a list when you leave out the value: `--lang`, `--color`, `--icons`, `--layout`, `--account`, `--project`, `--exclude`, `--exclude-file`, and `--set-alias`. For example, `claude-session-sync --account` lets you tick accounts, and `--set-alias` asks which account to name and pre-fills its current name. Outside a terminal they still need a value and exit with code 2.
+These options open a list when you leave out the value: `--lang`, `--color`, `--icons`, `--layout`, `--account`, `--project`, `--exclude`, `--exclude-file`, `--set-alias`, and `--forget-account`. For example, `claude-session-sync --account` lets you tick accounts, and `--set-alias` asks which account to name and pre-fills its current name. Outside a terminal they still need a value and exit with code 2.
 
 ### Questions
 
@@ -282,6 +297,7 @@ Run `claude-session-sync -h` for the same list, grouped the same way, with commo
 | Option | Description |
 |---|---|
 | `--account [<account-id>]` | Only sync this account. A prefix such as the 8 characters in the output is enough; add `/<org-id-prefix>` to pick one organization. Repeatable |
+| `--forget-account [<id>]` | Remove a known account whose desktop directory is gone from `accounts.json` (see [Known accounts](https://github.com/xushenjie/claude-session-sync#known-accounts)). Repeatable; exits after saving |
 | `--set-alias [<id>=<name>]` | Give an account a display name (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)); an empty name removes it. Repeatable; exits after saving |
 | `--project [<string>]` | Only handle sessions whose working directory contains this string (sync and purge) |
 | `--exclude [<session-id>]` | Exclude a session from sync and purge; repeatable |
@@ -353,15 +369,28 @@ Without `complete_aliases`, zsh expands the alias first and completes `python3`'
 The desktop app stores accounts by ID only, so the output shows names where it can find them:
 
 ```text
-│ ● │ work · Acme Inc · dan***@example.com  CLI │ 1a2b3c4d/0c1d2e3f │
-│ ● │ 3c4d5e6f/00000000                         │                   │
+│ ● work · dan***@example.com  current CLI │ 1a2b3c4d │
+│   ├ ● personal org                       │ 0c1d2e3f │
+│   └ ● Acme Inc                           │ 9f8e7d6c │
+│ ● 3c4d5e6f                               │          │
+│   └ ● 00000000                           │          │
 ```
 
 - **The account the CLI is signed in to** is recognized from `~/.claude.json` (only the account and organization IDs, email and organization name are read).
-- **Accounts the CLI was signed in to before**: every `--apply` remembers the current CLI account in `~/.claude-desktop-sync/accounts.json`, so it keeps its name after you switch.
-- **Any account**, with an alias you choose: press `n` in the menu, or run `claude-session-sync --set-alias` to pick the account from a list and edit its current name; `--set-alias 1a2b3c4d=work` does it in one go. Use `<account>/<org>` prefixes to name a single organization; an empty name removes the alias.
+- **Accounts the CLI was signed in to before**: every run remembers the current CLI account in `~/.claude-desktop-sync/accounts.json`, so it keeps its name after you switch.
+- **Any account or organization**, with an alias you choose: press `n` in the menu, or run `claude-session-sync --set-alias`. The list is laid out like the account table: pick an account row to name the whole account (shown on the account row), or an organization row to name just that organization (shown on its row instead of the organization name); the input starts with the current name. `--set-alias 1a2b3c4d=work` names an account in one go and `--set-alias 1a2b3c4d/0c1d2e3f=main-org` an organization; an empty name removes the alias.
 
-Emails are always shown masked (`dan***@example.com`), because this output often ends up in bug reports. Previews never write `accounts.json`.
+Emails are always shown masked (`dan***@example.com`), because this output often ends up in bug reports. Lists for picking accounts (menu `2`, `f`, `g`, `--account`, `-i`) read `account › organization  accountID/orgID`, so you can tell which account each organization belongs to.
+
+### Known accounts
+
+The desktop app keeps one directory per account and organization, and it disappears when you sign out or the app's data is cleared. So that such an account doesn't just silently drop out of the list, `accounts.json` doubles as a book of every account directory the tool has seen:
+
+- Every run, previews included, records each account/organization directory with the time it was first and last seen. This is the tool's own file; nothing under the desktop app's data is written by a preview.
+- The first time an older `accounts.json` is read, accounts are also recovered from the write journals (`journal-*.json`) of earlier runs.
+- An organization whose directory is gone is still listed, dimmed with `○`, `–` as its count and `skip: directory gone` (`-v` adds when it was last seen); the account table's title and the plan panel say how many there are. Nothing is written for it. Sign in to the account in the desktop app and run again, and it is synced like any other.
+- Gone accounts can still be named (`n`, `--set-alias`). When you no longer use one, press `g` in the menu or run `--forget-account <id>` to remove it and its name from `accounts.json`; an account whose directory still exists can't be forgotten, because the next run would record it again.
+- `--account` hides gone accounts, and `--json` lists them under `missing_accounts`.
 
 ---
 
