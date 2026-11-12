@@ -17,13 +17,18 @@ def cli_ids(entries):
     return sorted(e["cliSessionId"] for e in entries)
 
 
+def only_account_book(env):
+    """预览只会记下账号簿，不会留下写入日志或备份。"""
+    return not env.journal.exists() or sorted(p.name for p in env.journal.iterdir()) == ["accounts.json"]
+
+
 def test_preview_writes_nothing(env):
     env.add_index("existing")
     env.add_cli_session("new-1")
     before = sorted(p.name for p in env.desktop.rglob("*"))
     env.run()
     assert sorted(p.name for p in env.desktop.rglob("*")) == before
-    assert not env.journal.exists()
+    assert only_account_book(env)
 
 
 def test_apply_adds_missing_sessions_from_template(env):
@@ -336,7 +341,7 @@ def test_chinese_output(env, monkeypatch, capsys):
     env.add_cli_session("new-1")
     env.run()
     out = capsys.readouterr().out
-    assert "待补" in out and "aaaaaaaa/bbbbbbbb 1 +1" in squash(out) and "预览模式" in out
+    assert "本次处理" in out and "bbbbbbbb 1 补 1 个会话" in squash(out) and "预览模式" in out
 
 
 def test_english_output(env, capsys):
@@ -344,7 +349,7 @@ def test_english_output(env, capsys):
     env.add_cli_session("new-1")
     env.run()
     out = capsys.readouterr().out
-    assert "to add" in out and "aaaaaaaa/bbbbbbbb 1 +1" in squash(out) and "Preview only" in out
+    assert "this run" in out and "bbbbbbbb 1 add 1 session(s)" in squash(out) and "Preview only" in out
     assert not any("\u4e00" <= ch <= "\u9fff" for ch in out.replace("…", ""))
 
 
@@ -508,10 +513,11 @@ def test_heading_shows_masked_cli_account(env, monkeypatch, capsys):
     env.org_dir(ACCT, ORG_EMPTY)
     env.run()
     out = capsys.readouterr().out
-    assert "● al***@example.com current CLI login aaaaaaaa/bbbbbbbb" in squash(out)
+    assert "● al***@example.com current CLI aaaaaaaa" in squash(out)  # 账号行：邮箱
+    assert "├ ● personal org bbbbbbbb 1 in sync" in squash(out)  # "邮箱's Organization" 是这个账号的个人组织
     assert "alice@example.com" not in out  # 完整邮箱不能出现，组织名里的也不行
-    assert "● aaaaaaaa/bbbbbbbb 0 0" in squash(out)  # 另一个组织没有名称，只显示 ID
-    assert not env.journal.exists()  # 预览不写账号记录
+    assert "└ ● bbbbbbbb 0 in sync" in squash(out)  # 另一个组织没有名称，只显示 ID
+    assert only_account_book(env)  # 预览只记账号簿
 
 
 def test_apply_remembers_cli_account(env, monkeypatch, capsys):
@@ -524,7 +530,8 @@ def test_apply_remembers_cli_account(env, monkeypatch, capsys):
     monkeypatch.setattr(cli, "cli_login_account", lambda: None)
     capsys.readouterr()
     env.run()
-    assert "Acme · al***@example.com aaaaaaaa/bbbbbbbb" in squash(capsys.readouterr().out)
+    out = squash(capsys.readouterr().out)
+    assert "● al***@example.com aaaaaaaa └ ● Acme bbbbbbbb" in out
 
 
 def test_set_alias_and_remove(env, capsys):
@@ -535,8 +542,8 @@ def test_set_alias_and_remove(env, capsys):
     capsys.readouterr()
     env.run()
     out = capsys.readouterr().out
-    assert "work aaaaaaaa/bbbbbbbb 1" in squash(out)
-    assert "side aaaaaaaa/bbbbbbbb 0" in squash(out)
+    assert "● work aaaaaaaa ├ ● bbbbbbbb 1" in squash(out)  # 账号行显示账号名，组织没有自己的名称
+    assert "└ ● side bbbbbbbb 0" in squash(out)
     env.run("--set-alias", "aaaaaaaa=")
     saved = json.loads((env.journal / "accounts.json").read_text())
     assert ACCT not in saved["aliases"] and f"{ACCT}/{ORG_EMPTY}" in saved["aliases"]
@@ -595,7 +602,7 @@ def test_sessions_listed_once_across_accounts(env, capsys):
     out = capsys.readouterr().out
     assert out.count("unique title here") == 1
     assert "all accounts" in out
-    assert "add 1 session(s) (2 index file(s) in 2 account(s))" in out
+    assert "add 1 session(s) (2 index file(s) in 2 organization(s))" in out
 
 
 def test_long_list_is_capped_unless_verbose(env, capsys):
@@ -707,7 +714,7 @@ def test_preview_then_decline_writes_nothing(env, monkeypatch, capsys):
     env.add_cli_session("new-1")
     env.run()
     assert cli_ids(env.index_entries()) == ["existing"]
-    assert not env.journal.exists()
+    assert only_account_book(env)
     assert "Nothing was written." in capsys.readouterr().out
 
 
@@ -906,7 +913,7 @@ def test_purge_only_skipped_writes_nothing(env, monkeypatch):
     env.add_index("old", archived=True)
     fake_terminal(monkeypatch, ["", ""])
     env.run()
-    assert not env.journal.exists()
+    assert only_account_book(env)
 
 
 def test_no_purge_flag_and_scripts_do_not_offer_purge(env, monkeypatch, capsys):
@@ -1020,22 +1027,22 @@ def test_emoji_icons_and_alignment(env, capsys):
     env.add_cli_session("new-1")
     env.run("--icons", "emoji")
     lines = capsys.readouterr().out.splitlines()
-    rows = [line for line in lines if "aaaaaaaa/bbbbbbbb" in line]
-    assert rows[0].lstrip().startswith("⚪") and rows[1].lstrip().startswith("⚪")  # 都不是当前 CLI 账号
+    assert any(line.lstrip().startswith("⚪ aaaaaaaa") for line in lines)  # 不是当前 CLI 账号
+    rows = [line for line in lines if line.lstrip().startswith(("├", "└"))]
+    assert len(rows) == 2 and all("⚪ bbbbbbbb" in row for row in rows)
     head = next(line for line in lines if "existing" in line)
     # 表头"existing"的右端和数字的右端对齐（emoji 占两格）
     end = cli.disp_width(head[: head.index("existing")]) + len("existing")
     for row in rows:
-        i = row.index("aaaaaaaa/bbbbbbbb") + len("aaaaaaaa/bbbbbbbb")
-        num = row[i:].split()[0]
-        assert cli.disp_width(row[: i + row[i:].index(num)]) + len(num) == end
+        m = re.search(r"bbbbbbbb +(\d+) ", row)
+        assert cli.disp_width(row[: m.end(1)]) == end
 
 
 def test_ascii_icons(env, capsys):
     env.add_index("existing")
     env.run("--icons", "ascii")
     out = capsys.readouterr().out
-    assert "o aaaaaaaa/bbbbbbbb" in out and "●" not in out and "✓" not in out
+    assert "o aaaaaaaa" in out and "` o bbbbbbbb" in out and "●" not in out and "✓" not in out and "└" not in out
 
 
 def test_disp_width_ignores_colors_and_handles_emoji():
@@ -1142,7 +1149,7 @@ def test_boxed_layout_panels_are_aligned(env, monkeypatch, capsys):
     out = "\n".join(lines)
     for title in ("Accounts", "Sessions to add (1)", "Plan"):
         assert f"─ {title} ─" in out
-    assert "al***@example.com  CLI" in out and "aaaaaaaa/bbbbbbbb" in out
+    assert "al***@example.com  current CLI" in out and "aaaaaaaa" in out
     assert "…" in out  # 长标题按宽度截断
 
 
@@ -1153,7 +1160,9 @@ def test_boxed_layout_drops_id_column_when_narrow(env, monkeypatch, capsys):
     env.run("--layout", "boxed")
     lines = boxed_lines(capsys)
     assert all(cli.disp_width(line) == 60 for line in lines if line[0] in "╭│├╰")
-    assert "aaaaaaaa/bbbbbbbb" not in "\n".join(lines)
+    out = "\n".join(lines)
+    assert "aaaaaaaa" not in out and "│ ID " not in out  # ID 列去掉了
+    assert "in sync" in out  # 本次处理列还在
 
 
 def test_boxed_ascii_fallback(env, monkeypatch, capsys):
@@ -1332,26 +1341,33 @@ def test_valueless_account_picks_accounts(env, monkeypatch):
 def test_valueless_set_alias_wizard(env, monkeypatch, capsys):
     env.add_index("existing")
     env.org_dir(ACCT, ORG_EMPTY)
-    # 第 1 个起名 work，第 2 个起名 side，完成
-    press(monkeypatch, "enter", *"work", "enter", "down", "enter", *"side", "enter", "q")
+    # 列表是 账号、├ 组织 1、└ 组织 2、完成：两个组织分别起名 work、side
+    press(monkeypatch, "down", "enter", *"work", "enter", "down", "down", "enter", *"side", "enter", "q")
     env.run("--set-alias")
     aliases = json.loads((env.journal / "accounts.json").read_text())["aliases"]
     assert aliases == {f"{ACCT}/{ORG}": "work", f"{ACCT}/{ORG_EMPTY}": "side"}
     # 输入框预先填好 "work"：退格两次改成 "wo" + "w" = "wow"
-    press(monkeypatch, "enter", "backspace", "backspace", "w", "enter", "q")
+    press(monkeypatch, "down", "enter", "backspace", "backspace", "w", "enter", "q")
     env.run("--set-alias")
     assert json.loads((env.journal / "accounts.json").read_text())["aliases"][f"{ACCT}/{ORG}"] == "wow"
-    press(monkeypatch, "enter", "\x15", "enter", "q")  # Ctrl-U 清空 = 删除别名
+    press(monkeypatch, "down", "enter", "\x15", "enter", "q")  # Ctrl-U 清空 = 删除别名
     env.run("--set-alias")
     aliases = json.loads((env.journal / "accounts.json").read_text())["aliases"]
     assert aliases == {f"{ACCT}/{ORG_EMPTY}": "side"}
+    # 选第一行（账号）就给整个账号起名
+    press(monkeypatch, "enter", *"main", "enter", "q")
+    env.run("--set-alias")
+    aliases = json.loads((env.journal / "accounts.json").read_text())["aliases"]
+    assert aliases == {ACCT: "main", f"{ACCT}/{ORG_EMPTY}": "side"}
 
 
-def test_remove_account_level_alias_keeps_other_orgs(env):
-    book = {"aliases": {ACCT: "shared"}, "accounts": {}}
-    accts = [(None, ACCT, ORG, None), (None, ACCT, ORG_EMPTY, None)]
-    cli.remove_alias(book, accts, ACCT, ORG)
-    assert book["aliases"] == {f"{ACCT}/{ORG_EMPTY}": "shared"}
+def test_remove_account_alias_drops_old_same_named_org_aliases():
+    # 以前组织别名就是账号名；删账号名时一起删掉同名的，名称不同的组织别名留着
+    book = {"aliases": {ACCT: "shared", f"{ACCT}/{ORG}": "shared", f"{ACCT}/{ORG_EMPTY}": "side"}, "accounts": {}}
+    cli.remove_alias(book, ACCT)
+    assert book["aliases"] == {f"{ACCT}/{ORG_EMPTY}": "side"}
+    cli.remove_alias(book, ACCT, ORG_EMPTY)
+    assert book["aliases"] == {}
 
 
 def test_valueless_project_picks_project(env, monkeypatch):
@@ -1458,7 +1474,7 @@ def test_hub_alias_then_quit(env, monkeypatch, capsys):
     press(monkeypatch, "n", "enter", *"work", "enter", "q", "q")
     env.run()
     out = capsys.readouterr().out
-    assert json.loads((env.journal / "accounts.json").read_text())["aliases"] == {f"{ACCT}/{ORG}": "work"}
+    assert json.loads((env.journal / "accounts.json").read_text())["aliases"] == {ACCT: "work"}  # 第一行是账号
     assert "work" in out.split("Alias set")[-1]  # 重新预览时显示了新名称
 
 
@@ -1499,7 +1515,172 @@ def test_boxed_purge_panel_is_aligned(env, monkeypatch, capsys):
     assert all(cli.disp_width(line) == 80 for line in lines)
 
 
-# ---------------------------------------------------------------- 面板间距、会话图标、时间
+# ---------------------------------------------------------------- 已知账号簿
+
+GONE_ACCT = "cccccccc-0000-4000-8000-000000000003"
+GONE_ORG = "dddddddd-0000-4000-8000-000000000003"
+
+
+def write_book(env, data):
+    env.journal.mkdir(parents=True, exist_ok=True)
+    (env.journal / "accounts.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def gone_info(env):
+    return {"roots": [str(env.desktop)], "last_seen": "2026-01-05T10:15:00"}
+
+
+def read_book(env):
+    return json.loads((env.journal / "accounts.json").read_text(encoding="utf-8"))
+
+
+def test_preview_records_every_account_dir(env, monkeypatch):
+    monkeypatch.setattr(cli, "cli_login_account", lambda: dict(CLI_ACCT, org_name="Acme"))
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    env.run()
+    book = read_book(env)
+    assert book["version"] == 2
+    for org in (ORG, ORG_EMPTY):
+        info = book["accounts"][f"{ACCT}/{org}"]
+        assert info["roots"] == [str(env.desktop)] and info["first_seen"] <= info["last_seen"]
+    assert book["accounts"][f"{ACCT}/{ORG}"]["email"] == "alice@example.com"  # 预览也记下 CLI 账号
+    assert not list(env.journal.glob("journal-*.json"))
+
+
+def test_v1_book_is_upgraded_and_backfilled_from_journals(env, capsys):
+    env.add_index("existing")
+    gone_dir = env.desktop / GONE_ACCT / GONE_ORG
+    write_book(
+        env,
+        {
+            "version": 1,
+            "accounts": {
+                f"{GONE_ACCT}/{GONE_ORG}": {
+                    "email": "bob@example.com",
+                    "org_name": "Bob Team",
+                    "seen_at": "2026-01-02T03:04:05",
+                }
+            },
+            "aliases": {GONE_ACCT: "old-main"},
+        },
+    )
+    (env.journal / "journal-20260105-101500-000001.json").write_text(
+        json.dumps({"created": [str(gone_dir / "local_x.json")], "moved": []}), encoding="utf-8"
+    )
+    env.run("-v")
+    out = capsys.readouterr().out
+    info = read_book(env)["accounts"][f"{GONE_ACCT}/{GONE_ORG}"]
+    assert info["info_at"] == "2026-01-02T03:04:05" and "seen_at" not in info
+    assert info["last_seen"] == "2026-01-05T10:15:00" and info["roots"] == [str(env.desktop)]
+    lines = out.splitlines()
+    i = next(i for i, x in enumerate(lines) if "old-main · b***@example.com" in x)
+    assert "cccccccc" in lines[i] and "Bob Team" in lines[i + 1] and "dddddddd" in lines[i + 1]
+    assert "skip: directory gone · last seen 2026-01-05 10:15" in lines[i + 1]
+    assert "1 known organization directory no longer exists" in out
+    assert "1 directory(ies) gone" in out
+
+
+def test_missing_accounts_in_boxed_table_and_json(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "100")
+    env.add_index("existing")
+    write_book(
+        env,
+        {
+            "version": 2,
+            "accounts": {
+                f"{GONE_ACCT}/{GONE_ORG}": {
+                    "email": "bob@example.com",
+                    "org_name": "Bob Team",
+                    "roots": [str(env.desktop)],
+                    "first_seen": "2026-01-01T00:00:00",
+                    "last_seen": "2026-01-05T10:15:00",
+                },
+                # 只在 CLI 里登录过、从没在桌面端出现的账号不算"不在了"
+                "eeeeeeee-0000-4000-8000-000000000005/ffffffff-0000-4000-8000-000000000005": {"email": "x@example.com"},
+            },
+            "aliases": {},
+        },
+    )
+    env.run("--layout", "boxed")
+    lines = boxed_lines(capsys)
+    assert all(cli.disp_width(x) == 100 for x in lines if x[0] in "╭│├╰")
+    i = next(i for i, x in enumerate(lines) if "b***@example.com" in x)
+    assert "💤" not in lines[i] and "○ b***@example.com" in lines[i] and "cccccccc" in lines[i]
+    assert "└ ○ Bob Team" in lines[i + 1] and "dddddddd" in lines[i + 1] and "skip: directory gone" in lines[i + 1]
+    assert "last seen" not in lines[i + 1]  # 最后见到的时间只在 -v 时显示
+    assert "1 directory(ies) gone" in lines[next(j for j, x in enumerate(lines) if "─ Accounts ─" in x)]
+    assert "eeeeeeee" not in "\n".join(lines)
+    assert len([x for x in lines if x.startswith("├")]) == 1  # 只有一个客户端：只有表头下面的横线
+
+    env.run("--json")
+    data = json.loads(capsys.readouterr().out)
+    assert [(m["account"], m["last_seen"], m["action"]) for m in data["missing_accounts"]] == [
+        (GONE_ACCT, "2026-01-05T10:15:00", "gone")
+    ]
+    assert [a["action"] for a in data["accounts"]] == ["in_sync"]
+
+
+def test_missing_accounts_hidden_with_account_filter(env, capsys):
+    env.add_index("existing")
+    write_book(env, {"version": 2, "accounts": {f"{GONE_ACCT}/{GONE_ORG}": gone_info(env)}})
+    env.run("--account", "aaaaaaaa")
+    assert "cccccccc" not in capsys.readouterr().out
+
+
+def test_alias_and_forget_missing_account(env, capsys):
+    env.add_index("existing")
+    write_book(
+        env,
+        {
+            "version": 2,
+            "accounts": {f"{GONE_ACCT}/{GONE_ORG}": gone_info(env)},
+            "aliases": {},
+        },
+    )
+    env.run("--set-alias", "cccccccc=old")  # 目录不在的账号也能起名
+    assert read_book(env)["aliases"][GONE_ACCT] == "old"
+    with pytest.raises(SystemExit) as e:
+        env.run("--forget-account", "aaaaaaaa")  # 目录还在，不能忘记
+    assert "still has a directory" in str(e.value.code)
+    capsys.readouterr()
+    env.run("--forget-account", "cccccccc")
+    assert f"Forgot {GONE_ACCT}/{GONE_ORG}" in capsys.readouterr().out
+    book = read_book(env)
+    assert f"{GONE_ACCT}/{GONE_ORG}" not in book["accounts"] and GONE_ACCT not in book["aliases"]
+    env.run()
+    assert "cccccccc" not in capsys.readouterr().out
+
+
+def test_forget_from_menu(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.add_cli_session("existing")
+    write_book(env, {"version": 2, "accounts": {f"{GONE_ACCT}/{GONE_ORG}": gone_info(env)}})
+    monkeypatch.setattr(cli, "_UI", "simple")
+    fake_terminal(monkeypatch, ["g", "1", "y", "q"])
+    env.run()
+    out = capsys.readouterr().out
+    assert "Forget accounts that are gone" in out and "Forgot" in out
+    assert f"{GONE_ACCT}/{GONE_ORG}" not in read_book(env)["accounts"]
+
+
+# ---------------------------------------------------------------- 名称两行、面板间距、会话图标、时间
+
+
+def test_boxed_tree_shows_account_then_org(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "100")
+    monkeypatch.setattr(
+        cli, "cli_login_account", lambda: dict(CLI_ACCT, org_name="A very long organization name indeed")
+    )
+    env.add_index("existing")
+    env.run("--set-alias", "aaaaaaaa=main")
+    capsys.readouterr()
+    env.run("--layout", "boxed")
+    lines = boxed_lines(capsys)
+    i = next(i for i, x in enumerate(lines) if "main · al***@example.com  current CLI" in x)
+    assert "aaaaaaaa" in lines[i]  # 账号行：别名 · 邮箱，ID 列是账号 ID
+    assert "└ ● A very long organization name indeed" in lines[i + 1] and "bbbbbbbb" in lines[i + 1]
+    assert "alice@example.com" not in "\n".join(lines)
 
 
 def test_boxed_panels_are_separated_by_a_blank_line(env, monkeypatch, capsys):
@@ -1533,3 +1714,70 @@ def test_format_time_always_has_year():
 
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", cli.format_time(_time.time() * 1000))
     assert cli.format_time(_time.mktime((2020, 3, 4, 5, 6, 0, 0, 0, -1)) * 1000) == "2020-03-04 05:06"
+
+
+def test_cli_account_marked_even_when_its_directory_is_gone(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "100")
+    monkeypatch.setattr(cli, "cli_login_account", lambda: dict(CLI_ACCT, account=GONE_ACCT, org=GONE_ORG))
+    env.add_index("existing")
+    write_book(env, {"version": 2, "accounts": {f"{GONE_ACCT}/{GONE_ORG}": gone_info(env)}})
+    env.run("--layout", "boxed")
+    lines = boxed_lines(capsys)
+    i = next(i for i, x in enumerate(lines) if "cccccccc" in x)
+    assert "● al***@example.com  current CLI" in lines[i]  # 目录不在了，账号行仍然标出当前 CLI
+    assert "dddddddd" in lines[i + 1] and "skip: directory gone" in lines[i + 1]
+    assert lines.index(lines[i]) < next(j for j, x in enumerate(lines) if "aaaaaaaa" in x)  # CLI 账号排最前
+    assert "the account the CLI is signed in to has no directory" in squash(" ".join(x.strip("│ ") for x in lines))
+    env.run("--layout", "plain")
+    row = next(x for x in capsys.readouterr().out.splitlines() if "cccccccc" in x)
+    assert "current CLI" in row
+
+
+def test_personal_org_of_another_account_is_named_after_its_owner(env, monkeypatch, capsys):
+    # 另一个账号被邀请进了 alice 的个人组织：组织名是 "alice@example.com's Organization"
+    other = "eeeeeeee-0000-4000-8000-000000000005"
+    monkeypatch.setattr(cli, "cli_login_account", lambda: dict(CLI_ACCT))
+    env.add_index("existing")
+    env.add_index("existing", acct=other)
+    write_book(env, {"version": 2, "accounts": {}, "aliases": {ACCT: "main"}})
+    env.run()
+    out = squash(capsys.readouterr().out)
+    assert "● main · al***@example.com current CLI aaaaaaaa └ ● personal org bbbbbbbb" in out
+    assert "● eeeeeeee └ ● main's personal org bbbbbbbb" in out
+    monkeypatch.setattr(cli, "_LANG_ZH", True)
+    env.run()
+    assert "└ ● main 的个人组织 bbbbbbbb" in squash(capsys.readouterr().out)
+
+
+def test_filtered_out_accounts_are_listed_as_not_processed(env, capsys):
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    env.add_cli_session("new-1")
+    env.run("--account", "aaaaaaaa/bbbbbbbb-0000-4000-8000-000000000002")
+    out = squash(capsys.readouterr().out)
+    assert "├ ● bbbbbbbb 0 add 1 session(s)" in out  # 选中的组织照常处理
+    assert "bbbbbbbb – not processed (filtered out)" in out
+    assert "accounts 1 │ orgs 2" in out
+    env.run("--account", "aaaaaaaa/bbbbbbbb-0000-4000-8000-000000000002", "--json")
+    data = json.loads(capsys.readouterr().out)
+    assert [a["org"] for a in data["accounts"]] == [ORG_EMPTY]  # JSON 只列要处理的
+
+
+def test_accounts_grouped_by_client_when_there_are_several(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "100")
+    env.add_index("existing")
+    third = env.root / "Claude-3p" / "claude-code-sessions"
+    (third / "eeeeeeee-0000-4000-8000-000000000005" / "ffffffff-0000-4000-8000-000000000005").mkdir(parents=True)
+    cli.main(
+        ["--desktop-root", str(env.desktop), "--desktop-root", str(third), "--projects-dir", str(env.projects)]
+        + ["--layout", "boxed"]
+    )
+    lines = boxed_lines(capsys)
+    body = lines[next(i for i, x in enumerate(lines) if "─ Accounts ─" in x) :]
+    heads = [
+        i
+        for i, x in enumerate(body)
+        if x.startswith("│ ") and x[2:].split("│")[0].strip() in (env.root.name, "Claude-3p")
+    ]
+    assert len(heads) == 2 and body[heads[1] - 1].startswith("├")  # 每个客户端一节，中间用横线隔开
+    assert "eeeeeeee" in body[heads[1] + 1]

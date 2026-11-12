@@ -6,7 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `accounts.json` is now a book of every account/organization directory the tool has seen. An account whose directory is gone (signed out of the desktop app, or its data was cleared) stays in the list, dimmed as "directory gone" with when it was last seen, instead of silently disappearing. Upgrading recovers past accounts from the write journals.
+- `--forget-account` and the menu key `g` remove a gone account from `accounts.json`; `--json` lists gone accounts under `missing_accounts`.
+- A **this run** column says what happens to each organization: add N sessions, in sync, skipped (no template, or directory gone), or not processed because `--account` filtered it out. `--json` adds the same as `action` to each account.
+- `--set-alias` and the menu key `n` can name a whole account or a single organization from a tree-shaped list.
+
 ### Changed
+- Every run, previews included, records the account directories and the current CLI account in `accounts.json`. Nothing under the desktop app's data is written by a preview.
+- The account table is a tree of client → account → organization, so several organizations of one account no longer look like separate accounts. Account rows show the alias and masked email; organization rows show the organization name, with personal organizations shown as "personal org" (or whose they are). The header counts accounts and organizations separately.
+- Account pickers label each organization as `account › organization`.
 - Boxed panels are separated by a blank line.
 - Sessions get their own icon (`◇`, `💬` with `--icons emoji`); `⏳` now only marks running sessions.
 - Session times always include the year (`2026-11-12 11:22`); sessions from earlier years keep their time of day.
