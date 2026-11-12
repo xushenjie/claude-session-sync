@@ -353,15 +353,15 @@ Without `complete_aliases`, zsh expands the alias first and completes `python3`'
 The desktop app stores accounts by ID only, so the output shows names where it can find them:
 
 ```text
-│ ● │ work · Acme Inc · fan***@example.com  CLI │ b8073c71/677f8bdf │
-│ ● │ 07ac42e2/00000000                         │                   │
+│ ● │ work · Acme Inc · dan***@example.com  CLI │ 1a2b3c4d/0c1d2e3f │
+│ ● │ 3c4d5e6f/00000000                         │                   │
 ```
 
 - **The account the CLI is signed in to** is recognized from `~/.claude.json` (only the account and organization IDs, email and organization name are read).
 - **Accounts the CLI was signed in to before**: every `--apply` remembers the current CLI account in `~/.claude-desktop-sync/accounts.json`, so it keeps its name after you switch.
-- **Any account**, with an alias you choose: press `n` in the menu, or run `claude-session-sync --set-alias` to pick the account from a list and edit its current name; `--set-alias b8073c71=work` does it in one go. Use `<account>/<org>` prefixes to name a single organization; an empty name removes the alias.
+- **Any account**, with an alias you choose: press `n` in the menu, or run `claude-session-sync --set-alias` to pick the account from a list and edit its current name; `--set-alias 1a2b3c4d=work` does it in one go. Use `<account>/<org>` prefixes to name a single organization; an empty name removes the alias.
 
-Emails are always shown masked (`fan***@example.com`), because this output often ends up in bug reports. Previews never write `accounts.json`.
+Emails are always shown masked (`dan***@example.com`), because this output often ends up in bug reports. Previews never write `accounts.json`.
 
 ---
 

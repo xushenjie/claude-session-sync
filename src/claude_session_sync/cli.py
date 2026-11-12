@@ -114,6 +114,7 @@ SYMBOLS = {
     "minus": ("−", "-"),
     "cur": ("●", "*"),  # 当前 CLI 登录的账号
     "acct": ("●", "o"),  # 其他账号
+    "sess": ("◇", "-"),  # 会话
     "sel": ("❯", ">"),
 }
 # --icons emoji 时替换的符号；只选终端里固定占两格的 emoji，⚠️ 靠 U+FE0F 变成两格
@@ -131,6 +132,7 @@ EMOJI = {
     "group": "📁",
     "cur": "🟢",
     "acct": "⚪",
+    "sess": "💬",
 }
 ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
@@ -1717,10 +1719,12 @@ def add_to_exclude_file(sessions):
     return path
 
 
+TIME_FMT = "%Y-%m-%d %H:%M"
+
+
 def format_time(ms):
-    """今年的只显示月日，省出标题的宽度。"""
-    lt = time.localtime(ms / 1000)
-    return time.strftime("%m-%d %H:%M" if lt.tm_year == time.localtime().tm_year else "%Y-%m-%d", lt)
+    """毫秒时间戳 → 2026-11-12 11:22（本地时间，总是带年份）。"""
+    return time.strftime(TIME_FMT, time.localtime(ms / 1000))
 
 
 def pick_interactively(rows):
@@ -1819,7 +1823,7 @@ class SyncReport:
 
     def session_line(self, s, targets, verbose=False, title_w=None, mark_col=False):
         """title_w：同一批会话的标题统一占这么宽，后面的标记和目标账号就能对齐成一列。"""
-        lead = f"    {sym('add')} "
+        lead = f"    {sym('sess')} "
         when = format_time(s["lastActivityAt"])
         tgt = self.targets_text(targets)
         mark = f"{sym('run')} " + t("still being written", "运行中") if s["id"] in self.recent else ""
@@ -2130,7 +2134,8 @@ class SyncReport:
         for cwd, items in groups.items():
             lines.append(muted(fit(f"{sym('group')} {short_path(cwd)}", inner)))
             for s, targets in items:
-                parts = [(cell(f"  {format_time(s['lastActivityAt'])}", "dim"), 13), (cell(s["title"]), None)]
+                when = f"  {sym('sess')} {format_time(s['lastActivityAt'])}"
+                parts = [(cell(when, "dim"), disp_width(when)), (cell(s["title"]), None)]
                 if mark_w:
                     parts.append((cell(running if s["id"] in self.recent else "", "yellow"), mark_w))
                 if tgt_w:
@@ -2193,19 +2198,19 @@ class SyncReport:
     def print_boxed(self, verbose, quiet):
         pending = self.pending()
         limit = None if verbose else LIST_LIMIT
-        out = []
+        blocks = []  # 每个面板一块，块之间空一行
         if not quiet:
             ver = f"claude-session-sync {__version__}"
             line = muted("  ·  ").join(f"{muted(k)} {style(str(v), 'bold')}" for k, v in self.stats())
             lines = [line] + ([muted(self.verbose_stats())] if verbose else [])
-            out += panel(ver, lines)
-            out += self.boxed_accounts()
+            blocks.append(panel(ver, lines))
+            blocks.append(self.boxed_accounts())
             if pending:
-                out += self.boxed_pending(pending, verbose, limit)
+                blocks.append(self.boxed_pending(pending, verbose, limit))
         if self.purge is not None and (self.purge[0] or not quiet):
-            out += self.boxed_purge(quiet, limit)
-        out += self.boxed_plan(pending, quiet)
-        print("\n".join(out))
+            blocks.append(self.boxed_purge(quiet, limit))
+        blocks.append(self.boxed_plan(pending, quiet))
+        print("\n\n".join("\n".join(b) for b in blocks))
 
     def print_plan(self, verbose=False, quiet=False):
         if _BOXES:
@@ -2697,7 +2702,7 @@ def ask_include_recent(sessions):
         )
     )
     for s in sorted(sessions, key=lambda s: -s["lastActivityAt"])[:LIST_LIMIT]:
-        print(f"  {caution(sym('run'))} {fit(s['title'], max(20, term_width() - 6))}")
+        print(f"  {sym('sess')} {fit(s['title'], max(20, term_width() - 6))}")
     hint = t(
         "(set include_recent in config.toml to stop asking)",
         "（在 config.toml 里设置 include_recent 可不再询问）",
@@ -2937,9 +2942,9 @@ Notes:
         const=ASK,
         metavar="ID=NAME",
         help=t(
-            "give an account a display name, e.g. b8073c71=work (ID prefix, optionally /<org-id-prefix>); "
+            "give an account a display name, e.g. 1a2b3c4d=work (ID prefix, optionally /<org-id-prefix>); "
             "an empty name removes it; repeatable, then exits",
-            "给账号起显示名称，如 b8073c71=工作号（ID 前缀，可加 /<组织ID前缀>）；名称留空则删除；可多次使用，设置完即退出",
+            "给账号起显示名称，如 1a2b3c4d=工作号（ID 前缀，可加 /<组织ID前缀>）；名称留空则删除；可多次使用，设置完即退出",
         ),
     )
     pick.add_argument(
