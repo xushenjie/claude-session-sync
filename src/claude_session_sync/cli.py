@@ -583,7 +583,7 @@ WIN_KEYS = {"H": "up", "P": "down", "K": "left", "M": "right", "G": "home", "O":
 def read_key():
     """读一个按键，返回 up/down/left/right/home/end/pgup/pgdn/enter/space/esc/backspace/tab 或字符本身。"""
     if _keys is not None:
-        return next(_keys)
+        return next(_keys, "esc")  # 测试用的按键序列用完后当作 Esc
     if os.name == "nt":
         import msvcrt
 
@@ -626,7 +626,7 @@ class Screen:
         self.height = 0
 
     def draw(self, lines):
-        width = term_width() - 1
+        width = term_width()  # 面板和终端一样宽；写满一行再换行不会多折一行
         out = []
         if self.height:
             out.append(f"\033[{self.height}F")
@@ -682,12 +682,14 @@ def window(n, cursor, size):
     return start, start + size
 
 
-def option_line(o, selected, inner, mark=None):
-    """一行选项：光标、勾选框、标签、右侧说明。"""
+def option_line(o, selected, inner, mark=None, keyed=False):
+    """一行选项：光标、快捷键、勾选框、标签、右侧说明。"""
     pointer = style(sym("sel"), "cyan", "bold") if selected else " "
     box = ""
+    if keyed:  # 菜单里显示每项的快捷键
+        box = muted(pad(o.get("key", ""), 2))
     if mark is not None:
-        box = (todo("[x]") if mark else muted("[ ]")) + " "
+        box += (todo("[x]") if mark else muted("[ ]")) + " "
     label = o["label"]
     note = o.get("note", "")
     left_w = inner - 2 - disp_width(box) - (disp_width(note) + 2 if note else 0)
@@ -717,7 +719,10 @@ def select_one(title, options, default=0):
             body = []
             for i in range(start, end):
                 o = options[i]
-                body.append(muted("  " + o["label"]) if o.get("sep") else option_line(o, i == cursor, inner))
+                keyed = any(x.get("key") for x in options)
+                body.append(
+                    muted("  " + o["label"]) if o.get("sep") else option_line(o, i == cursor, inner, keyed=keyed)
+                )
             screen.draw(frame(title, KEY_HINT_ONE, body))
             key = read_key()
             pos = choices.index(cursor)
@@ -2596,9 +2601,14 @@ def apply_lang_flag(argv, cfg=None):
         _LANG_ZH = cfg["lang"] == "zh"
 
 
-def choose_action(report, can_undo):
-    """终端里预览之后的菜单，返回 "write" / "pick" / "undo" / "quit"。默认（回车）= 写入。"""
-    options = [{"key": "1", "value": "write", "alias": "yes", "label": t("Write the plan above", "按上面的计划写入")}]
+def hub_menu(report, can_undo, filters="", excluded=0):
+    """终端里预览之后的总菜单。返回 write / pick / undo / filter / alias / exclude / settings / quit。
+    有待补会话时默认（回车）写入，已全部同步时默认退出。"""
+    options = [{"label": t("Sync", "同步"), "sep": True}]
+    if report.has_work():
+        options.append(
+            {"key": "1", "value": "write", "alias": "yes", "label": t("Write the plan above", "按上面的计划写入")}
+        )
     if report.n_files():
         options.append(
             {
@@ -2609,10 +2619,72 @@ def choose_action(report, can_undo):
         )
     if can_undo:
         options.append({"key": "3", "value": "undo", "label": t("Undo the most recent write", "撤销最近一次写入")})
-    options.append({"key": "q", "value": "quit", "alias": "no", "label": t("Quit without writing", "不写入，退出")})
+    options += [
+        {"label": t("Manage", "管理"), "sep": True},
+        {
+            "key": "f",
+            "value": "filter",
+            "label": t("Only some accounts or a project", "只看某些账号/项目"),
+            "note": filters,
+        },
+        {"key": "n", "value": "alias", "label": t("Name accounts", "给账号起名")},
+        {
+            "key": "x",
+            "value": "exclude",
+            "label": t("Exclude list", "排除列表"),
+            "note": t(f"{excluded} sessions", f"{excluded} 个") if excluded else "",
+        },
+        {"key": "s", "value": "settings", "label": t("Defaults", "默认设置")},
+        {
+            "key": "q",
+            "value": "quit",
+            "alias": "no",
+            "label": t("Quit without writing", "不写入，退出") if report.has_work() else t("Quit", "退出"),
+        },
+    ]
+    default = next(i for i, o in enumerate(options) if o.get("value") == ("write" if report.has_work() else "quit"))
     if keys_available():
         print()
-    return select_one(t("What next?", "接下来做什么？"), options, default=0) or "quit"
+    return select_one(t("What next?", "接下来做什么？"), options, default=default) or "quit"
+
+
+def filter_menu(args, ctx):
+    """菜单里的"只看某些账号/项目"：改 args.account / args.project，然后重新预览。"""
+    options = [
+        {
+            "value": "account",
+            "label": t("Accounts", "按账号"),
+            "note": t(f"{len(args.account)} selected", f"已选 {len(args.account)} 个")
+            if args.account
+            else t("all", "全部"),
+        },
+        {
+            "value": "project",
+            "label": t("Project", "按项目"),
+            "note": short_path(args.project) if args.project else t("all", "全部"),
+        },
+        {"value": "clear", "label": t("Clear filters", "清除筛选")},
+    ]
+    picked = select_one(t("Filter", "筛选"), options)
+    if picked == "account":
+        args.account = pick_accounts(ctx) or None
+    elif picked == "project":
+        args.project = pick_project(ctx)
+    elif picked == "clear":
+        args.account, args.project = None, None
+
+
+def apply_settings(args, cfg):
+    """设置表单保存后，让这次运行也立即用上新设置。"""
+    global _UI, _LANG_ZH
+    for key in ("color", "icons", "layout"):
+        setattr(args, key, cfg.get(key, {"color": "auto", "icons": "symbols", "layout": "auto"}[key]))
+    args.purge_archived = cfg.get("purge_archived")
+    args.include_recent = cfg.get("include_recent")
+    _UI = cfg.get("ui", "keys")
+    if cfg.get("lang"):
+        _LANG_ZH = cfg["lang"] == "zh"
+    setup_terminal(args.color, args.icons, args.layout)
 
 
 def ask_include_recent(sessions):
@@ -3196,8 +3268,8 @@ def build_plan(args, ctx, interactive):
     # 没指定 --[no-]include-recent 时，在终端里询问是否一并同步正在写入的会话
     rows, held_back = build_rows(set() if args.include_recent else recent)
     if held_back and args.include_recent is None and interactive:
-        if ask_include_recent([s for s in sessions if s["id"] in held_back]):
-            args.include_recent = True  # 同一次运行里重新预览时不再问
+        args.include_recent = ask_include_recent([s for s in sessions if s["id"] in held_back])  # 重新预览时不再问
+        if args.include_recent:
             rows, held_back = build_rows(set())
 
     # 没指定 --[no-]purge-archived 时，只在终端里找出可清除的会话，写入时再询问
@@ -3273,21 +3345,12 @@ def write_plan(args, ctx, report, do_purge, interactive):
 
 
 def decide(args, report, interactive):
-    """决定是否写入、是否清除：--apply，或者在终端里预览后从菜单选择。返回 (动作, 是否清除)，
-    动作是 "write" / "undo" / "none"。"""
+    """菜单以外的情况（--apply、-i、脚本里）决定是否写入、是否清除。返回 (动作, 是否清除)，
+    动作是 "write" / "none"。"""
     apply, do_purge = args.apply, bool(report.purge_plan())
     if not (interactive and report.has_work()):
         return ("write" if apply else "none"), do_purge
-    if not apply and not args.interactive:
-        can_undo = JOURNAL_DIR.exists() and any(JOURNAL_DIR.glob("journal-*.json"))
-        action = choose_action(report, can_undo)
-        if action == "undo":
-            return "undo", False
-        if action == "pick":
-            pick_interactively(report.rows)
-        apply = action in ("write", "pick") and report.has_work()
-        do_purge = do_purge and apply
-    elif not apply:
+    if not apply:
         print()
         apply = confirm_key(t("Write now?", "现在写入？"))
     if apply and do_purge:
@@ -3388,17 +3451,56 @@ def run(argv=None):
         return
     resolve_asks(args, ctx, cfg, interactive)
 
-    report = build_plan(args, ctx, interactive)
-    if args.interactive:
-        pick_interactively(report.rows)
-    if not args.json:
-        report.print_plan(verbose=args.verbose, quiet=args.quiet)
+    # 终端里没写 -a / -i：预览后进入总菜单，管理类操作做完重新预览
+    hub = interactive and not args.apply and not args.interactive
+    first = True
+    while True:
+        if hub and not first and _keys is None and keys_available():
+            sys.stdout.write("\033[H\033[J")  # 重新预览前清屏，输出不会越堆越长
+        report = build_plan(args, ctx, interactive)
+        if args.interactive and first:
+            pick_interactively(report.rows)
+        first = False
+        if not args.json:
+            report.print_plan(verbose=args.verbose, quiet=args.quiet)
+        if not hub:
+            action, do_purge = decide(args, report, interactive)
+            break
+        can_undo = JOURNAL_DIR.exists() and any(JOURNAL_DIR.glob("journal-*.json"))
+        filters = " · ".join(
+            x
+            for x in (
+                t(f"{len(args.account)} account(s)", f"{len(args.account)} 个账号") if args.account else "",
+                short_path(args.project) if args.project else "",
+            )
+            if x
+        )
+        choice = hub_menu(report, can_undo, filters, len(read_exclude_file(default_exclude_file())))
+        if choice == "undo":
+            print()
+            undo(args.force, interactive)
+            return
+        if choice == "filter":
+            filter_menu(args, ctx)
+        elif choice == "alias":
+            alias_wizard(ctx)
+        elif choice == "exclude":
+            manage_exclude_file()
+        elif choice == "settings":
+            new = settings_wizard(load_config())
+            if new is not None:
+                apply_settings(args, new)
+        else:
+            if choice == "pick":
+                pick_interactively(report.rows)
+            do_purge = choice in ("write", "pick") and bool(report.purge_plan())
+            action = "write" if choice in ("write", "pick") and report.has_work() else "none"
+            if action == "write" and do_purge:
+                do_purge = confirm_purge(args, report)
+                if not do_purge and not report.n_files():
+                    action = "none"
+            break
 
-    action, do_purge = decide(args, report, interactive)
-    if action == "undo":
-        print()
-        undo(args.force, interactive)
-        return
     written = write_plan(args, ctx, report, do_purge, interactive) if action == "write" else None
     if action != "write" and not args.json and report.has_work():
         if interactive:
