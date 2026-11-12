@@ -10,14 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Short options: `-a` (`--apply`), `-p` (`--purge-archived`), `-r` (`--include-recent`), `-u` (`--undo`).
 - `--completion zsh` prints a zsh completion script for options and their values.
 - `--icons symbols|emoji|ascii` (also `icons` in `config.toml`) picks the status icons.
-- In a terminal, the preview ends with a menu instead of "Write now? [y/N]": Enter writes, `2` picks accounts and sessions first, `3` undoes the most recent write, `q` quits.
+- In a terminal, the preview always ends with a menu instead of "Write now? [y/N]": Enter writes, `2` picks accounts and sessions first, `3` undoes the most recent write, `f` narrows to some accounts or a project, `n` names accounts, `x` edits the exclude list, `s` edits defaults, `q` quits. `-a` skips it.
+- Lists are picked with the keyboard: `↑` `↓` (or `j` `k`) move, Space ticks, `a` ticks everything, `/` filters, digits and letters jump, Enter confirms the highlighted default, Esc goes back. Terminals that can't read single keys, or `ui = "simple"` in `config.toml`, get numbered input instead.
+- Options left without a value in a terminal open a list: `--lang`, `--color`, `--icons`, `--layout`, `--account`, `--project`, `--exclude`, `--exclude-file`, `--set-alias` (which pre-fills the current name). Outside a terminal they exit with code 2.
+- `--layout auto|boxed|plain` (also `layout` in `config.toml`): output in framed panels and tables that fit the terminal width, or plain text. `auto` draws frames only in a terminal; terminals without box-drawing characters get ASCII frames.
+- `--save-defaults` on its own opens a settings form in a terminal.
 - Questions come up when they matter: a terminal run asks whether to sync sessions written in the last 2 minutes, and offers to purge archived sessions when you write. `--[no-]include-recent` and `--[no-]purge-archived` answer in advance.
-- `~/.claude-desktop-sync/config.toml` holds defaults for `lang`, `color`, `purge_archived`, `include_recent` and `per_account_archive`; `--save-defaults` saves the current run's values.
+- `~/.claude-desktop-sync/config.toml` holds defaults for `lang`, `color`, `icons`, `layout`, `ui`, `purge_archived`, `include_recent` and `per_account_archive`; `--save-defaults` saves the current run's values.
 
 ### Changed
 - `--help` starts with five common commands and groups the options into Common, Accounts and filters, Output, Advanced, and Other; help text wraps by display width so Chinese lines fit the terminal.
-- Clearer output: a one-line header with the key counts; an aligned account table with status icons, a `★` on the current CLI login, ID prefixes, and a notes column explaining why counts differ (archived, excluded, running, orphaned index entries, command-only sessions); sessions grouped by working directory with aligned titles; colors with fixed meanings (green done, cyan to add, yellow attention, red delete); a colored menu; a short summary after writing; and dim tips when everything is in sync.
+- Clearer output: a one-line header with the key counts; an aligned account table with a green `●` on the current CLI login (dim `●` for the others, yellow `⚠` without a template), ID prefixes, and a notes column explaining why counts differ (archived, excluded, running, orphaned index entries, command-only sessions); sessions grouped by working directory with aligned titles; colors with fixed meanings (green done, cyan to add, yellow attention, red delete); a colored menu; a short summary after writing; and dim tips when everything is in sync.
 - Pressing Enter after the preview now writes; type `q` or `n` to leave without writing.
+- `-i` / `--interactive` uses the keyboard pickers instead of numbered lists.
+- Ctrl-C quits cleanly with exit code 130 and restores the terminal.
 
 ### Fixed
 - Sessions that start with a slash command (such as `/implement`) or an IDE notice are no longer skipped as empty. A session now counts when it has user text or a real model reply; sessions that only ran a local command such as `/model` are still skipped. Titles fall back to the session's AI title, then to the command and its arguments.

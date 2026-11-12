@@ -103,45 +103,99 @@ Output is in English, or in Chinese when your locale (`LC_ALL` / `LC_MESSAGES` /
 
 ## Output and interactive use
 
-A preview looks like this (made-up data):
+Run it with no options in a terminal and everything else is a key press away: the preview ends with a menu, and options you leave without a value open a list to pick from. A preview looks like this (made-up data):
 
 ```text
-claude-session-sync  CLI sessions 5 │ accounts 3 │ archived/deleted 1
+╭─ claude-session-sync 0.3.2 ──────────────────────────────────────────────────────╮
+│ CLI sessions 4  ·  accounts 3  ·  archived/deleted 1                             │
+╰──────────────────────────────────────────────────────────────────────────────────╯
+╭─ Accounts ───────────────────────────────────────────────────────────────────────╮
+│   │ Name                   │ ID                │ existing │ to add │ notes       │
+├───┼────────────────────────┼───────────────────┼──────────┼────────┼─────────────┤
+│ ● │ work                   │ 1a2b3c4d/9f8e7d6c │        2 │     +2 │             │
+│ ● │ al***@example.com  CLI │ 5e6f7a8b/0c1d2e3f │        2 │     +1 │ −1 archived │
+│ ● │ 5e6f7a8b/9f8e7d6c      │                   │        2 │     +1 │ −1 archived │
+╰───┴────────────────────────┴───────────────────┴──────────┴────────┴─────────────╯
+╭─ Sessions to add (2) ────────────────────────────────────────────────────────────╮
+│ ▸ ~/work/docs                                                                    │
+│   11-12 08:38  Draft release notes                                → work         │
+│ ▸ ~/work/webapp                                                                  │
+│   11-12 08:38  Fix login redirect                                 → all accounts │
+╰──────────────────────────────────────────────────────────────────────────────────╯
+╭─ Archived sessions to purge (1) ─────────────────────────────────────────────────╮
+│ −  Old experiment                       1 index file(s), 1 CLI file(s)  4d5e6f70 │
+╰──────────────────────────────────────────────────────────────────────────────────╯
+╭─ Plan ───────────────────────────────────────────────────────────────────────────╮
+│ + add 2 session(s) (4 index file(s) in 3 account(s))                             │
+│ − delete 1 archived session(s)                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────╯
 
-Accounts                                              existing  to add  notes
-  ↓ work                           1a2b3c4d/9f8e7d6c         2  +2      −1 running
-  ↓ al***@example.com ★ CLI login  5e6f7a8b/0c1d2e3f         2  +1      −1 archived · −1 running
-  ↓ 5e6f7a8b/9f8e7d6c                                        2  +1      −1 archived · −1 running
-
-Sessions to add (2)
-  ▸ ~/work/docs
-    + 11-12 08:38  Draft release notes  → work
-  ▸ ~/work/webapp
-    + 11-12 08:38  Fix login redirect   → all accounts
-
-⚠ Skipped 1 session(s) written in the last 2 minutes (probably still running). Pass --include-recent to sync them anyway.
-
-Archived sessions to purge (1)
-    − Old experiment  1 index file(s), 1 CLI file(s)  4d5e6f70-1a2b-4c3d-8e9f-0a1b2c3d4e5f
-
-Plan: add 2 session(s) (4 index file(s) in 3 account(s)); delete 1 archived session(s)
-
-What next?
-  [1] Write the plan above  (Enter)
-  [2] Pick accounts/sessions first, then write
-  [3] Undo the most recent write
-  [q] Quit without writing
+╭─ What next? ───────────────────────────────── ↑↓ move · Enter select · Esc back ─╮
+│   Sync                                                                           │
+│ ❯ 1 Write the plan above                                                         │
+│   2 Pick accounts/sessions first, then write                                     │
+│   3 Undo the most recent write                                                   │
+│   Manage                                                                         │
+│   f Only some accounts or a project                                              │
+│   n Name accounts                                                                │
+│   x Exclude list                                                                 │
+│   s Defaults                                                                     │
+│   q Quit without writing                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-- The header line counts usable CLI sessions, desktop accounts, and sessions archived or deleted anywhere. Each account row shows a status icon (`✓` in sync, `↓` has sessions to add, `⚠` no template), its name (`★` marks the current CLI login), its ID prefix for `--account`, and a **notes** column explaining why its count differs from the others: `−N archived` (archived or deleted in some account, so not added), `−N excluded`, `−N running`, `+N orphaned` (the index points to a transcript that no longer exists), `+N command-only/empty`.
+- The header panel counts usable CLI sessions, desktop accounts, and sessions archived or deleted anywhere. In the account table a green `●` marks the current CLI login (its name is followed by `CLI`), a dim `●` the other accounts, and a yellow `⚠` an account with no template. The ID column gives the prefix for `--account`, and the **notes** column explains why counts differ: `−N archived` (archived or deleted in some account, so not added), `−N excluded`, `−N running`, `+N orphaned` (the index points to a transcript that no longer exists), `+N command-only/empty`.
 - Sessions are grouped by working directory (`▸`) and listed once, with the accounts they go to (`→`). Up to 20 are shown; `-v` lists all of them, plus session IDs and extra statistics. `-q` prints only the summary and warnings.
-- **Prompts only appear in a terminal.** When both input and output are a terminal, the preview ends with a menu: Enter (or `1`/`y`) writes without re-running, `2` lets you pick accounts and sessions first, `3` undoes the most recent write (shown when there is one), and `q` (or `n`) quits without writing. If the desktop app is still running, it waits for you to quit it and press Enter. Scripts, pipes, and CI never get a question; `--no-input` turns prompts off in a terminal too.
-- **Questions come up only when they matter.** If sessions were written in the last 2 minutes, a terminal run lists them and asks whether to sync them too (default: no). If archived sessions can be purged, it offers to delete them when you write (type `yes`; Enter keeps them). `--[no-]include-recent` and `--[no-]purge-archived`, or the same keys in `config.toml`, answer these in advance.
-- `-i` / `--interactive` shows numbered lists of accounts (when more than one has something to add) and sessions to pick from. Press Enter for all, or type `1-5,8` to pick, `!3` to leave one out, `none`, or `q` to cancel. Sessions you leave out can be remembered in `~/.claude-desktop-sync/exclude.txt`, which every later run reads automatically; delete a line there to sync that session again.
-- In a terminal, purging only happens after you type `yes`, and `--undo` shows what the last run did and asks first.
-- `--json` prints the plan (and, with `--apply`, what was written) as JSON for scripts. It never prompts and has no colors.
-- Colors carry meaning: green = in sync or done, cyan = will be added, yellow = needs attention, red = will be deleted, dim = details. They are used only in a terminal; `NO_COLOR` is honored and `--color always|never` overrides.
-- `--icons emoji` swaps the symbols for emoji (✅ 📥 ⚠️ 🧹 ⭐ 💡); `--icons ascii` uses plain ASCII. If the terminal can't show the symbols, ASCII is used automatically.
+- Panels fill the terminal up to 100 columns and shrink on narrow screens; long titles are cut with `…`. `--layout plain` (or `layout = "plain"` in `config.toml`) prints the same content without frames, which is also what pipes and files get by default. Terminals that can't show box-drawing characters, and `--icons ascii`, get ASCII frames.
+
+### The menu
+
+When both input and output are a terminal, the preview always ends with the **What next?** menu, even when everything is in sync (then Enter just quits):
+
+| Key | Does |
+|---|---|
+| `1` / Enter | Write the plan above |
+| `2` | Pick accounts and sessions first, then write |
+| `3` | Undo the most recent write (shown when there is one) |
+| `f` | Only some accounts or a project; the preview is rebuilt |
+| `n` | Name accounts (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)) |
+| `x` | Exclude list: untick sessions to sync them again |
+| `s` | Defaults: language, colors, icons, layout, and the questions below, saved to `config.toml` |
+| `q` / Esc | Quit without writing |
+
+`-a` / `--apply` skips the menu and writes. Scripts, pipes, and CI never get a menu or a question; `--no-input` turns them off in a terminal too. If the desktop app is still running when you write, it waits for you to quit it and press Enter.
+
+### Keys in lists
+
+| Key | Does |
+|---|---|
+| `↑` `↓` (or `k` `j`) | Move |
+| `←` `→` | Previous / next page; in the settings form, change the value |
+| Space | Tick or untick (lists where you pick several) |
+| `a` | Tick or untick everything shown |
+| `/` | Filter by typing; Enter keeps the filter, Esc clears it |
+| `1`–`9`, letters | Pick that item directly |
+| Enter | Confirm; the highlighted item is the default |
+| Esc / `q` | Go back without changing anything |
+
+If the terminal can't read single key presses (for example `TERM=dumb`), or `ui = "simple"` is set in `config.toml`, every list becomes numbered: type a number (`1-5,8`, `!3` to leave one out, `none`) and press Enter.
+
+### Options without a value
+
+These options open a list when you leave out the value: `--lang`, `--color`, `--icons`, `--layout`, `--account`, `--project`, `--exclude`, `--exclude-file`, and `--set-alias`. For example, `claude-session-sync --account` lets you tick accounts, and `--set-alias` asks which account to name and pre-fills its current name. Outside a terminal they still need a value and exit with code 2.
+
+### Questions
+
+- **They come up only when they matter.** If sessions were written in the last 2 minutes, a terminal run lists them and asks whether to sync them too (default: no). If archived sessions can be purged, it offers to delete them when you write (default: keep). `--[no-]include-recent` and `--[no-]purge-archived`, or the same keys in `config.toml`, answer these in advance.
+- `-i` / `--interactive` opens the account list (when more than one account has something to add) and the session list before writing. Sessions you untick can be remembered in `~/.claude-desktop-sync/exclude.txt`, which every later run reads automatically; the `x` menu entry (or deleting a line there) syncs them again.
+- Purging only happens after you confirm it, and `--undo` shows what the last run did and asks first.
+- Ctrl-C quits at any point without writing (exit code 130).
+
+### Other output
+
+- `--json` prints the plan (and, with `--apply`, what was written) as JSON for scripts. It never prompts and has no colors or frames.
+- Colors carry meaning: green = current account, in sync or done; cyan = will be added; yellow = needs attention; red = will be deleted; dim = details. They are used only in a terminal; `NO_COLOR` is honored and `--color always|never` overrides.
+- `--icons emoji` swaps the symbols for emoji (🟢 ⚪ ✅ 📥 ⚠️ 🧹 💡); `--icons ascii` uses plain ASCII. If the terminal can't show the symbols, ASCII is used automatically.
 - When everything is in sync, dim `›` tips point out orphaned index entries, when the last write happened, and `--save-defaults` if you have no `config.toml` yet.
 
 ---
@@ -189,47 +243,49 @@ claude-session-sync --purge-archived --apply   # do it
 
 ### Defaults (`config.toml`)
 
-Options you'd otherwise type every time can live in `~/.claude-desktop-sync/config.toml`. Command-line options always win.
+Options you'd otherwise type every time can live in `~/.claude-desktop-sync/config.toml`. Command-line options always win. The easiest way to edit it is `s` in the menu (or `--save-defaults` on its own): a form where `←` `→` change each value and Enter saves.
 
 ```toml
 lang = "zh"                 # en | zh
 color = "auto"              # auto | always | never
 icons = "emoji"             # symbols | emoji | ascii
+layout = "auto"             # auto | boxed | plain
+ui = "keys"                 # keys (arrow-key lists) | simple (numbered input)
 purge_archived = true       # leave out to be asked in a terminal
 include_recent = false      # leave out to be asked in a terminal
 per_account_archive = false
 ```
 
-`--save-defaults` writes the current run's values of these options to the file, for example `claude-session-sync --lang zh --no-include-recent --save-defaults`. Delete a line to go back to the built-in default. Language is picked from `--lang`, then `CLAUDE_SESSION_SYNC_LANG`, then `config.toml`, then the locale.
+`--save-defaults` writes the current run's values of these options (except `ui`) to the file, for example `claude-session-sync --lang zh --no-include-recent --save-defaults`. Delete a line to go back to the built-in default. Language is picked from `--lang`, then `CLAUDE_SESSION_SYNC_LANG`, then `config.toml`, then the locale.
 
 ---
 
 ## Options
 
-Run `claude-session-sync -h` for the same list, grouped the same way, with common commands at the top.
+Run `claude-session-sync -h` for the same list, grouped the same way, with common commands at the top. A value in `[brackets]` can be left out in a terminal to pick it from a list (see [Options without a value](https://github.com/xushenjie/claude-session-sync#options-without-a-value)).
 
 **Common**
 
 | Option | Description |
 |---|---|
-| (no options) | Preview; in a terminal a menu follows |
-| `-a`, `--apply` | Actually write |
-| `-i`, `--interactive` | Pick accounts and sessions from numbered lists before writing (terminal only) |
+| (no options) | Preview; in a terminal the [menu](https://github.com/xushenjie/claude-session-sync#the-menu) follows |
+| `-a`, `--apply` | Write without showing the menu |
+| `-i`, `--interactive` | Pick accounts and sessions from a list before writing (terminal only) |
 | `-p`, `--[no-]purge-archived` | Permanently delete (or never delete) archived sessions after syncing (see above). Unset: offered in a terminal when there are any |
 | `-r`, `--[no-]include-recent` | Also sync (or never sync) sessions written in the last 2 minutes (possibly still running). They are marked in the output; purging still skips them. Unset: asked in a terminal |
 | `-u`, `--undo` | Undo the most recent write or deletion |
-| `--lang en\|zh` | Output language; overrides `CLAUDE_SESSION_SYNC_LANG`, `config.toml`, and the locale |
-| `--save-defaults` | Save this run's `--lang`, `--color`, `--icons`, and the `--[no-]…` options to `config.toml`, then continue |
+| `--lang [en\|zh]` | Output language; overrides `CLAUDE_SESSION_SYNC_LANG`, `config.toml`, and the locale |
+| `--save-defaults` | Save this run's `--lang`, `--color`, `--icons`, `--layout`, and the `--[no-]…` options to `config.toml`, then continue |
 
 **Accounts and filters**
 
 | Option | Description |
 |---|---|
-| `--account <account-id>` | Only sync this account. A prefix such as the 8 characters in the output is enough; add `/<org-id-prefix>` to pick one organization. Repeatable |
-| `--set-alias <id>=<name>` | Give an account a display name (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)); an empty name removes it. Repeatable; exits after saving |
-| `--project <string>` | Only handle sessions whose working directory contains this string (sync and purge) |
-| `--exclude <session-id>` | Exclude a session from sync and purge; repeatable |
-| `--exclude-file <file>` | Read excluded session IDs from a file, one per line; text after `#` is a comment. `~/.claude-desktop-sync/exclude.txt` is always read as well |
+| `--account [<account-id>]` | Only sync this account. A prefix such as the 8 characters in the output is enough; add `/<org-id-prefix>` to pick one organization. Repeatable |
+| `--set-alias [<id>=<name>]` | Give an account a display name (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)); an empty name removes it. Repeatable; exits after saving |
+| `--project [<string>]` | Only handle sessions whose working directory contains this string (sync and purge) |
+| `--exclude [<session-id>]` | Exclude a session from sync and purge; repeatable |
+| `--exclude-file [<file>]` | Read excluded session IDs from a file, one per line; text after `#` is a comment. `~/.claude-desktop-sync/exclude.txt` is always read as well |
 
 **Output**
 
@@ -239,8 +295,9 @@ Run `claude-session-sync -h` for the same list, grouped the same way, with commo
 | `-v`, `--verbose` | List every session, with session IDs and extra statistics |
 | `--json` | Print the result as JSON; implies `--no-input` and no colors |
 | `--no-input` | Never ask questions, even in a terminal |
-| `--color auto\|always\|never` | Colored output; `auto` (default) only colors a terminal and honors `NO_COLOR` |
-| `--icons symbols\|emoji\|ascii` | Status icons: `✓ ↓ ⚠` (default), emoji, or plain ASCII |
+| `--color [auto\|always\|never]` | Colored output; `auto` (default) only colors a terminal and honors `NO_COLOR` |
+| `--icons [symbols\|emoji\|ascii]` | Status icons: `● ✓ ⚠` (default), emoji, or plain ASCII |
+| `--layout [auto\|boxed\|plain]` | Boxed panels and tables, or plain text; `auto` (default) draws boxes only in a terminal |
 
 **Advanced**
 
@@ -295,14 +352,14 @@ Without `complete_aliases`, zsh expands the alias first and completes `python3`'
 
 The desktop app stores accounts by ID only, so the output shows names where it can find them:
 
-```
-[work · Acme Inc · fan***@example.com · current CLI login] (b8073c71…/677f8bdf…) existing 122, to add 1
-[07ac42e2…/00000000…] existing 119, to add 1
+```text
+│ ● │ work · Acme Inc · fan***@example.com  CLI │ b8073c71/677f8bdf │
+│ ● │ 07ac42e2/00000000                         │                   │
 ```
 
 - **The account the CLI is signed in to** is recognized from `~/.claude.json` (only the account and organization IDs, email and organization name are read).
 - **Accounts the CLI was signed in to before**: every `--apply` remembers the current CLI account in `~/.claude-desktop-sync/accounts.json`, so it keeps its name after you switch.
-- **Any account**, with an alias you choose: `claude-session-sync --set-alias b8073c71=work`. Use `<account>/<org>` prefixes to name a single organization.
+- **Any account**, with an alias you choose: press `n` in the menu, or run `claude-session-sync --set-alias` to pick the account from a list and edit its current name; `--set-alias b8073c71=work` does it in one go. Use `<account>/<org>` prefixes to name a single organization; an empty name removes the alias.
 
 Emails are always shown masked (`fan***@example.com`), because this output often ends up in bug reports. Previews never write `accounts.json`.
 
