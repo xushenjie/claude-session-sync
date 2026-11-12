@@ -694,7 +694,7 @@ def test_preview_then_confirm_writes(env, monkeypatch, capsys):
 
 
 def test_preview_then_decline_writes_nothing(env, monkeypatch, capsys):
-    fake_terminal(monkeypatch, [""])  # 回车 = 默认 N
+    fake_terminal(monkeypatch, ["q"])
     env.add_index("existing")
     env.add_cli_session("new-1")
     env.run()
@@ -805,3 +805,171 @@ def test_exclude_file_comments_and_missing(env, tmp_path):
     with pytest.raises(SystemExit) as e:
         env.run("--exclude-file", str(tmp_path / "nope.txt"))
     assert "Exclude file not found" in str(e.value.code)
+
+
+# ---------------------------------------------------------------- 菜单、当场询问、默认设置
+
+
+def test_menu_enter_writes(env, monkeypatch, capsys):
+    fake_terminal(monkeypatch, [""])
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing", "new-1"]
+    assert "What next?" in capsys.readouterr().out
+
+
+def test_menu_undo_option(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run("--apply")
+    env.add_cli_session("new-2")
+    fake_terminal(monkeypatch, ["3", "y"])  # 菜单选撤销，再确认
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing"]
+    assert "Undid" in capsys.readouterr().out
+
+
+def test_menu_hides_undo_without_journal(env, monkeypatch, capsys):
+    fake_terminal(monkeypatch, ["3", "q"])  # 没有日志时 3 不是有效选项
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run()
+    out = capsys.readouterr().out
+    assert "Undo the most recent write" not in out
+    assert "Please choose one of the options above." in out
+    assert cli_ids(env.index_entries()) == ["existing"]
+
+
+def test_menu_pick_then_write(env, monkeypatch):
+    env.add_index("existing")
+    env.add_cli_session("a", text="task a")
+    env.add_cli_session("b", text="task b")
+    fake_terminal(monkeypatch, ["2", "1", "n"])  # 挑第 1 个，不记住另一个
+    env.run()
+    assert len(cli_ids(env.index_entries())) == 2
+
+
+def test_asks_about_recent_sessions(env, monkeypatch, capsys):
+    import time
+
+    env.add_index("existing")
+    env.add_cli_session("running", mtime=time.time())
+    fake_terminal(monkeypatch, ["y", ""])  # 一并同步，然后菜单回车写入
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing", "running"]
+    assert "may still be running" in capsys.readouterr().out
+
+
+def test_declining_recent_keeps_them_back(env, monkeypatch):
+    import time
+
+    env.add_index("existing")
+    env.add_cli_session("running", mtime=time.time())
+    fake_terminal(monkeypatch, [""])  # 默认不同步；之后没有可写的，不再出菜单
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing"]
+
+
+def test_no_include_recent_never_asks(env, monkeypatch, capsys):
+    import time
+
+    env.add_index("existing")
+    env.add_cli_session("running", mtime=time.time())
+    fake_terminal(monkeypatch, [])
+    env.run("--no-include-recent")
+    assert "may still be running" not in capsys.readouterr().out
+
+
+def test_offers_purge_in_terminal(env, monkeypatch):
+    arch = env.add_index("old", archived=True)
+    env.add_index("keep")
+    env.add_cli_session("new-1")
+    fake_terminal(monkeypatch, ["", ""])  # 菜单写入，清除问题回车 = 保留
+    env.run()
+    assert arch.exists()
+    assert "new-1" in cli_ids(env.index_entries())
+    fake_terminal(monkeypatch, ["", "yes"])
+    env.run()
+    assert not arch.exists()
+
+
+def test_purge_only_skipped_writes_nothing(env, monkeypatch):
+    env.add_index("old", archived=True)
+    fake_terminal(monkeypatch, ["", ""])
+    env.run()
+    assert not env.journal.exists()
+
+
+def test_no_purge_flag_and_scripts_do_not_offer_purge(env, monkeypatch, capsys):
+    env.add_index("old", archived=True)
+    env.add_index("keep")
+    env.run()  # 非终端：不计算清除
+    assert "Purge archived sessions" not in capsys.readouterr().out
+    fake_terminal(monkeypatch, [])
+    env.run("--no-purge-archived")
+    assert "Purge archived sessions" not in capsys.readouterr().out
+
+
+def test_config_sets_defaults(env, monkeypatch, capsys):
+    import time
+
+    cli.JOURNAL_DIR.mkdir(parents=True)
+    cli.config_file().write_text('lang = "zh"\ninclude_recent = true  # 注释\n', encoding="utf-8")
+    monkeypatch.delenv(cli.LANG_ENV, raising=False)
+    env.add_index("existing")
+    env.add_cli_session("running", mtime=time.time())
+    env.run("--apply")
+    assert cli_ids(env.index_entries()) == ["existing", "running"]
+    assert "已写入" in capsys.readouterr().out
+    env.run("--lang", "en")  # 命令行优先
+    assert "Everything is in sync" in capsys.readouterr().out
+
+
+def test_env_lang_beats_config(monkeypatch, capsys):
+    cli.JOURNAL_DIR.mkdir(parents=True)
+    cli.config_file().write_text('lang = "zh"\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_LANG_ZH", None)
+    monkeypatch.setenv(cli.LANG_ENV, "en")
+    cli.apply_lang_flag([], cli.load_config())
+    assert cli.t("en", "zh") == "en"
+
+
+def test_bad_config_values_are_ignored(capsys):
+    cli.JOURNAL_DIR.mkdir(parents=True)
+    cli.config_file().write_text('lang = "fr"\nunknown = true\npurge_archived = true\n', encoding="utf-8")
+    assert cli.load_config() == {"purge_archived": True}
+    out = capsys.readouterr().out
+    assert "lang" in out and "unknown" in out
+
+
+def test_unparsable_config_is_ignored(capsys):
+    cli.JOURNAL_DIR.mkdir(parents=True)
+    cli.config_file().write_text("this is not toml\n", encoding="utf-8")
+    assert cli.load_config() == {}
+    assert "cannot parse" in capsys.readouterr().out
+
+
+def test_simple_toml_fallback():
+    assert cli._parse_simple_toml("# c\nlang = 'zh'\npurge_archived = false # x\n") == {
+        "lang": "zh",
+        "purge_archived": False,
+    }
+    with pytest.raises(ValueError):
+        cli._parse_simple_toml("x = 1\n")
+
+
+def test_save_defaults_roundtrip(env, capsys):
+    env.add_index("existing")
+    env.run("--save-defaults", "--lang", "en", "--purge-archived", "--no-include-recent")
+    assert "Saved defaults" in capsys.readouterr().out
+    assert cli.load_config() == {
+        "lang": "en",
+        "color": "auto",
+        "purge_archived": True,
+        "include_recent": False,
+        "per_account_archive": False,
+    }
+    env.run("--save-defaults", "--no-purge-archived")  # 再次保存时保留没改的项
+    cfg = cli.load_config()
+    assert cfg["purge_archived"] is False and cfg["lang"] == "en" and cfg["include_recent"] is False

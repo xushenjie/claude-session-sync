@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- In a terminal, the preview ends with a menu instead of "Write now? [y/N]": Enter writes, `2` picks accounts and sessions first, `3` undoes the most recent write, `q` quits.
+- Questions come up when they matter: a terminal run asks whether to sync sessions written in the last 2 minutes, and offers to purge archived sessions when you write. `--[no-]include-recent` and `--[no-]purge-archived` answer in advance.
+- `~/.claude-desktop-sync/config.toml` holds defaults for `lang`, `color`, `purge_archived`, `include_recent` and `per_account_archive`; `--save-defaults` saves the current run's values.
+
+### Changed
+- Pressing Enter after the preview now writes; type `q` or `n` to leave without writing.
+
 ### Fixed
 - Sessions that start with a slash command (such as `/implement`) or an IDE notice are no longer skipped as empty. A session now counts when it has user text or a real model reply; sessions that only ran a local command such as `/model` are still skipped. Titles fall back to the session's AI title, then to the command and its arguments.
 
