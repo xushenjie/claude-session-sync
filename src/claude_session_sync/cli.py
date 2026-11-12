@@ -42,7 +42,7 @@ import unicodedata
 import uuid
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 HOME = Path.home()
 JOURNAL_DIR = HOME / ".claude-desktop-sync"

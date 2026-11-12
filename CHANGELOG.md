@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-12
+
 ### Added
 - `--repair` and the menu key `r` clean up index entries that 0.5.0 or earlier wrote with another session's state. Only entries the tool created (found through the journals) are changed, the originals are backed up, and `--undo` restores them.
 
@@ -108,7 +110,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.1...v0.3.2

@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-12
+
 ### 新增
 - `--repair` 和菜单按键 `r` 清理 0.5.0 及以前写入、带着别的会话状态的索引条目。只改本工具新建过的条目（按写入日志查找），原文件先备份，`--undo` 可以还原。
 
@@ -108,7 +110,8 @@
 - `--version`，以及带示例的 `--help`。
 - 中英文输出，按系统语言自动选择；可用 `CLAUDE_SESSION_SYNC_LANG=en|zh` 覆盖。
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.1...v0.3.2
