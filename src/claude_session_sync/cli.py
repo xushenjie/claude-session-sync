@@ -1364,23 +1364,150 @@ class SyncReport:
         }
 
 
+# ---------------------------------------------------------------- 默认设置
+#
+# ~/.claude-desktop-sync/config.toml 保存常用参数的默认值，命令行参数总是优先。
+# 只支持下面几个键；purge_archived / include_recent 不写表示"在终端里每次询问"。
+
+CONFIG_KEYS = {
+    "lang": ("en", "zh"),
+    "color": ("auto", "always", "never"),
+    "purge_archived": bool,
+    "include_recent": bool,
+    "per_account_archive": bool,
+}
+
+
+def config_file():
+    return JOURNAL_DIR / "config.toml"
+
+
+def _parse_simple_toml(text):
+    """Python 3.11 以前没有 tomllib：只解析 `键 = true/false/"字符串"` 这种平铺写法。"""
+    data = {}
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        key, sep, val = (x.strip() for x in line.partition("="))
+        if not sep:
+            raise ValueError(raw)
+        if val in ("true", "false"):
+            data[key] = val == "true"
+        elif len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            data[key] = val[1:-1]
+        else:
+            raise ValueError(raw)
+    return data
+
+
+def load_config():
+    """读取默认设置；文件不存在返回空字典，无法识别的键或取值提示后忽略。"""
+    p = config_file()
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        try:
+            import tomllib
+        except ImportError:
+            data = _parse_simple_toml(text)
+        else:
+            data = tomllib.loads(text)
+    except ValueError as e:  # tomllib.TOMLDecodeError 也是 ValueError
+        warn(t(f"Ignoring {p}: cannot parse it ({e}).", f"忽略 {p}：无法解析（{e}）。"))
+        return {}
+    cfg = {}
+    for key, val in data.items():
+        allowed = CONFIG_KEYS.get(key)
+        ok = allowed is not None and (isinstance(val, bool) if allowed is bool else val in allowed)
+        if ok:
+            cfg[key] = val
+        else:
+            warn(t(f"Ignoring {key} = {val!r} in {p}.", f"忽略 {p} 里的 {key} = {val!r}。"))
+    return cfg
+
+
+def save_config(cfg):
+    JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    lines = ["# claude-session-sync defaults; command-line options always win."]
+    for key in CONFIG_KEYS:
+        if key in cfg:
+            val = cfg[key]
+            lines.append(f"{key} = {str(val).lower() if isinstance(val, bool) else json.dumps(val)}")
+    p = config_file()
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return p
+
+
 # ---------------------------------------------------------------- 主流程
 
 
-def apply_lang_flag(argv):
-    """在构建帮助文本之前先读取 --lang，让 --help 和后续输出都使用指定语言。
-    非法取值交给正式的解析器报错。"""
+def apply_lang_flag(argv, cfg=None):
+    """在构建帮助文本之前先确定语言，让 --help 和后续输出都使用它。
+    优先级：--lang > CLAUDE_SESSION_SYNC_LANG > 配置文件 > 系统语言。非法取值交给正式的解析器报错。"""
     global _LANG_ZH
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--lang")
     known, _ = pre.parse_known_args(argv)
     if known.lang in ("en", "zh"):
         _LANG_ZH = known.lang == "zh"
+    elif cfg and cfg.get("lang") and not os.environ.get(LANG_ENV):
+        _LANG_ZH = cfg["lang"] == "zh"
+
+
+def choose_action(report, can_undo):
+    """终端里预览之后的菜单，返回 "write" / "pick" / "undo" / "quit"。回车 = 写入。"""
+    options = [("1", "write", t("Write the plan above", "按上面的计划写入"))]
+    if report.n_files():
+        options.append(("2", "pick", t("Pick accounts/sessions first, then write", "先挑选账号/会话，再写入")))
+    if can_undo:
+        options.append(("3", "undo", t("Undo the most recent write", "撤销最近一次写入")))
+    options.append(("q", "quit", t("Quit without writing", "不写入，退出")))
+    print()
+    print(style(t("What next?", "接下来做什么？"), "bold"))
+    for key, _, label in options:
+        print(f"  {key}) {label}" + (style(t("  (Enter)", "  （回车）"), "dim") if key == "1" else ""))
+    aliases = {"": "1", "y": "1", "yes": "1", "n": "q", "no": "q"}
+    while True:
+        answer = ask(t("Choose: ", "请选择："))
+        if answer is None:
+            return "quit"
+        answer = answer.strip().lower()
+        answer = aliases.get(answer, answer)
+        for key, action, _ in options:
+            if answer == key:
+                return action
+        warn(t("Please choose one of the options above.", "请输入上面列出的选项。"))
+
+
+def ask_include_recent(sessions):
+    """有最近仍在写入的会话时询问是否一并同步，默认不同步。"""
+    print(
+        style(
+            t(
+                f"{len(sessions)} session(s) were written in the last 2 minutes and may still be running:",
+                f"有 {len(sessions)} 个会话最近 2 分钟内仍在写入，可能正在运行：",
+            ),
+            "yellow",
+        )
+    )
+    for s in sorted(sessions, key=lambda s: -s["lastActivityAt"])[:LIST_LIMIT]:
+        print(f"  {sym('dot')} {fit(s['title'], max(20, term_width() - 6))}")
+    hint = t(
+        "(set include_recent in config.toml to stop asking)",
+        "（在 config.toml 里设置 include_recent 可不再询问）",
+    )
+    ok = confirm(t("Sync them too?", "一并同步？") + " " + style(hint, "dim"))
+    print()
+    return ok
 
 
 def main(argv=None):
     use_safe_stdio()
-    apply_lang_flag(argv)
+    cfg = load_config()
+    apply_lang_flag(argv, cfg)
     ap = argparse.ArgumentParser(
         prog="claude-session-sync",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1397,7 +1524,7 @@ def main(argv=None):
         epilog=t(
             """\
 Typical workflow:
-  %(prog)s                          preview what each account would get (in a terminal, asks to write)
+  %(prog)s                          preview what each account would get (in a terminal, then a menu)
   %(prog)s -i                       pick accounts and sessions from a list, then write
   %(prog)s --apply                  write (quit the desktop app completely first, e.g. ⌘Q)
   %(prog)s --undo                   undo the most recent write/purge
@@ -1414,11 +1541,14 @@ Notes:
   * Quit the desktop app completely before writing, and reopen it afterwards.
   * Journals and backups live in ~/.claude-desktop-sync/; --undo steps back one run at a time.
   * The desktop index format is undocumented and may break with desktop updates.
-  * Output language: --lang, then CLAUDE_SESSION_SYNC_LANG, then LC_ALL / LC_MESSAGES / LANG.
+  * Output language: --lang, then CLAUDE_SESSION_SYNC_LANG, then config.toml, then LC_ALL / LC_MESSAGES / LANG.
+  * Defaults live in ~/.claude-desktop-sync/config.toml (lang, color, purge_archived, include_recent,
+    per_account_archive); save the current options with --save-defaults. When purge_archived or
+    include_recent is unset, a terminal run asks each time it matters.
 """,
             """\
 常用流程：
-  %(prog)s                          预览每个账号会补哪些会话（在终端里会问是否写入）
+  %(prog)s                          预览每个账号会补哪些会话（在终端里随后给出菜单）
   %(prog)s -i                       从列表里挑选账号和会话后写入
   %(prog)s --apply                  写入（先 ⌘Q 彻底退出桌面端）
   %(prog)s --undo                   撤销最近一次写入/删除
@@ -1435,7 +1565,10 @@ Notes:
   * 写入前请彻底退出桌面端（菜单栏 ⌘Q），写完重新打开。
   * 日志与备份在 ~/.claude-desktop-sync/，--undo 按时间倒序逐次撤销。
   * 桌面端索引格式无官方文档，桌面端更新后可能失效。
-  * 输出语言：依次看 --lang、CLAUDE_SESSION_SYNC_LANG、LC_ALL / LC_MESSAGES / LANG。
+  * 输出语言：依次看 --lang、CLAUDE_SESSION_SYNC_LANG、config.toml、LC_ALL / LC_MESSAGES / LANG。
+  * 默认设置在 ~/.claude-desktop-sync/config.toml（lang、color、purge_archived、include_recent、
+    per_account_archive），可以用 --save-defaults 保存当前参数。purge_archived、include_recent
+    没设置时，在终端里遇到相关情况会当场询问。
 """,
         ),
     )
@@ -1495,16 +1628,18 @@ Notes:
     )
     ap.add_argument(
         "--include-recent",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help=t(
             "also sync sessions written in the last 2 minutes (possibly still running); "
-            "--purge-archived still skips them",
-            "同步时不跳过最近 2 分钟内仍在写入的会话（可能正在运行）；--purge-archived 仍然会跳过",
+            "--purge-archived still skips them. Unset: ask in a terminal",
+            "同步时不跳过最近 2 分钟内仍在写入的会话（可能正在运行）；--purge-archived 仍然会跳过。"
+            "不指定时在终端里询问",
         ),
     )
     ap.add_argument(
         "--per-account-archive",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help=t(
             "only exclude sessions archived in the same account (default: archived anywhere = excluded everywhere)",
             "只按本账号的归档状态排除（默认：任一账号归档即全部排除）",
@@ -1529,10 +1664,22 @@ Notes:
     )
     ap.add_argument(
         "--purge-archived",
+        action=argparse.BooleanOptionalAction,
+        help=t(
+            "after syncing, permanently delete archived sessions (index + CLI .jsonl, backed up, undoable). "
+            "Unset: offer it in a terminal when there are any",
+            "同步后彻底删除已归档会话（索引 + CLI 的 .jsonl，备份到日志目录，可 --undo）。"
+            "不指定时，在终端里发现已归档会话会询问",
+        ),
+    )
+    ap.add_argument(
+        "--save-defaults",
         action="store_true",
         help=t(
-            "after syncing, permanently delete archived sessions (index + CLI .jsonl, backed up, undoable)",
-            "同步后彻底删除已归档会话（索引 + CLI 的 .jsonl，备份到日志目录，可 --undo）",
+            "save --lang, --color, --[no-]purge-archived, --[no-]include-recent and --[no-]per-account-archive "
+            "of this run to ~/.claude-desktop-sync/config.toml, then continue",
+            "把本次的 --lang、--color、--[no-]purge-archived、--[no-]include-recent、--[no-]per-account-archive "
+            "保存到 ~/.claude-desktop-sync/config.toml 作为默认值，然后照常运行",
         ),
     )
     ap.add_argument(
@@ -1577,8 +1724,15 @@ Notes:
             "彩色输出（默认 auto：只在终端里启用，遵循 NO_COLOR）",
         ),
     )
+    ap.set_defaults(**cfg)
     args = ap.parse_args(argv)
     setup_terminal("never" if args.json else args.color)
+    if args.save_defaults:
+        saved = {k: getattr(args, k) for k in CONFIG_KEYS if getattr(args, k) is not None}
+        p = save_config(saved)
+        if not args.json:
+            items = ", ".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in saved.items())
+            print(style(sym("ok"), "green"), t(f"Saved defaults to {p}: {items}", f"已保存默认设置到 {p}：{items}"))
     interactive = not args.no_input and not args.json and is_interactive()
     if args.interactive and not interactive:
         sys.exit(
@@ -1688,38 +1842,47 @@ Notes:
         sessions = [s for s in sessions if args.project in s["cwd"]]
     now = time.time()
     recent = {s["id"] for s in sessions if now - s["mtime"] < RUNNING_GRACE_SEC}
-    skip_recent = set() if args.include_recent else recent
 
-    # 每个账号要补哪些会话
-    rows, held_back = [], set()
-    for d, (acct, org, entries, known, archived) in indexes.items():
-        template, source = pick_template(entries), "own"
-        if not template:
-            template = fallback.get(root_of[d]) or any_fallback
-            source = "borrowed" if template else "none"
-        arch = archived if args.per_account_archive else archived_global
-        missing = [s for s in sessions if s["id"] not in known and s["id"] not in arch and s["id"] not in excluded]
-        held_back |= {s["id"] for s in missing if s["id"] in skip_recent}
-        rows.append(
-            {
-                "dir": d,
-                "acct": acct,
-                "org": org,
-                "known": len(known),
-                "todo": [s for s in missing if s["id"] not in skip_recent],
-                "template": template,
-                "source": source,
-                "label": account_label(acct, org, book, cli_acct),
-                "heading": account_heading(acct, org, book, cli_acct),
-                "short": account_short(acct, org, book, cli_acct),
-            }
-        )
+    def build_rows(skip_recent):
+        """每个账号要补哪些会话；返回 (rows, 因为最近仍在写入而暂缓的会话 ID)。"""
+        rows, held_back = [], set()
+        for d, (acct, org, entries, known, archived) in indexes.items():
+            template, source = pick_template(entries), "own"
+            if not template:
+                template = fallback.get(root_of[d]) or any_fallback
+                source = "borrowed" if template else "none"
+            arch = archived if args.per_account_archive else archived_global
+            missing = [s for s in sessions if s["id"] not in known and s["id"] not in arch and s["id"] not in excluded]
+            held_back |= {s["id"] for s in missing if s["id"] in skip_recent}
+            rows.append(
+                {
+                    "dir": d,
+                    "acct": acct,
+                    "org": org,
+                    "known": len(known),
+                    "todo": [s for s in missing if s["id"] not in skip_recent],
+                    "template": template,
+                    "source": source,
+                    "label": account_label(acct, org, book, cli_acct),
+                    "heading": account_heading(acct, org, book, cli_acct),
+                    "short": account_short(acct, org, book, cli_acct),
+                }
+            )
+        return rows, held_back
+
+    # 没指定 --[no-]include-recent 时，在终端里询问是否一并同步正在写入的会话
+    rows, held_back = build_rows(set() if args.include_recent else recent)
+    if held_back and args.include_recent is None and interactive:
+        if ask_include_recent([s for s in sessions if s["id"] in held_back]):
+            rows, held_back = build_rows(set())
 
     if args.interactive:
         pick_interactively(rows)
 
+    # 没指定 --[no-]purge-archived 时，只在终端里找出可清除的会话，写入时再询问
+    want_purge = args.purge_archived if args.purge_archived is not None else interactive
     purge = None
-    if args.purge_archived:
+    if want_purge:
         # 清除时始终覆盖全部账号，避免 --account 过滤后其他账号残留指向已删 .jsonl 的索引；
         # --exclude 和 --project 仍然生效，正在写入的会话按 .jsonl 修改时间单独判断
         all_idx, all_archived = {}, set()
@@ -1734,28 +1897,49 @@ Notes:
             }
             all_idx[d] = (acct, org, entries, None, None)
         purge = plan_purge(all_idx, all_archived, projects, excluded=excluded, project=args.project)
+        if args.purge_archived is None and not purge[0]:
+            purge = None  # 没要求清除、也没有可清除的，就不在预览里多显示一节
 
     report = SyncReport(rows, sessions, skipped, recent, held_back, purge, archived_global, deleted_global)
     if not args.json:
         report.print_plan(verbose=args.verbose, quiet=args.quiet)
 
-    # 决定是否写入：--apply，或者在终端里预览后确认
+    # 决定是否写入：--apply，或者在终端里预览后从菜单选择
     apply, do_purge = args.apply, bool(purge and purge[0])
     if interactive and report.has_work():
-        if not apply:
+        if not apply and not args.interactive:
+            can_undo = JOURNAL_DIR.exists() and any(JOURNAL_DIR.glob("journal-*.json"))
+            action = choose_action(report, can_undo)
+            if action == "undo":
+                print()
+                undo(args.force, interactive)
+                return
+            if action == "pick":
+                pick_interactively(rows)
+            apply = action in ("write", "pick") and report.has_work()
+            do_purge = do_purge and apply
+        elif not apply:
             print()
             apply = confirm(t("Write now?", "现在写入？"))
         if apply and do_purge:
-            answer = ask(
-                t(
-                    f"Type yes to permanently delete {len(purge[0])} archived session(s) "
-                    "(backed up, --undo restores them): ",
-                    f"输入 yes 确认彻底删除 {len(purge[0])} 个已归档会话（会先备份，可 --undo 还原）：",
+            n = len(purge[0])
+            if args.purge_archived:
+                prompt = t(
+                    f"Type yes to permanently delete {n} archived session(s) (backed up, --undo restores them): ",
+                    f"输入 yes 确认彻底删除 {n} 个已归档会话（会先备份，可 --undo 还原）：",
                 )
-            )
+            else:
+                prompt = t(
+                    f"Also permanently delete the {n} archived session(s) above? "
+                    "Type yes to delete (backed up, --undo restores them), Enter to keep them: ",
+                    f"顺便彻底删除上面 {n} 个已归档会话吗？输入 yes 删除（会先备份，可 --undo 还原），回车保留：",
+                )
+            answer = ask(prompt)
             if (answer or "").strip().lower() != "yes":
                 do_purge = False
                 warn(t("Purge skipped; archived sessions are kept.", "已跳过清除，已归档会话保留。"))
+            if not do_purge and not report.n_files():
+                apply = False  # 只剩清除而又跳过了，就不必再检查桌面端、写日志
 
     written = None
     if apply:

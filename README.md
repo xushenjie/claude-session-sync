@@ -97,9 +97,9 @@ claude-session-sync --undo
 
 > If it says the desktop app is running, the app is still alive in the menu bar or system tray and **nothing was written**. Quit it fully and run again (in a terminal it waits for you instead).
 
-In a terminal you can skip step 2: the preview ends with `Write now? [y/N]`. See [Output and interactive use](https://github.com/xushenjie/claude-session-sync#output-and-interactive-use).
+In a terminal you can skip step 2: the preview ends with a menu, and Enter writes. See [Output and interactive use](https://github.com/xushenjie/claude-session-sync#output-and-interactive-use).
 
-Output is in English, or in Chinese when your locale (`LC_ALL` / `LC_MESSAGES` / `LANG`, or the Windows display language) is Chinese. Pass `--lang en` or `--lang zh` for a single run, or set `CLAUDE_SESSION_SYNC_LANG=en` or `zh` in your shell profile to change it for good without touching your locale.
+Output is in English, or in Chinese when your locale (`LC_ALL` / `LC_MESSAGES` / `LANG`, or the Windows display language) is Chinese. Pass `--lang en` or `--lang zh` for a single run, or make it the default with `--lang zh --save-defaults` (see [Defaults](https://github.com/xushenjie/claude-session-sync#defaults-configtoml)) or `CLAUDE_SESSION_SYNC_LANG=zh` in your shell profile.
 
 ## Output and interactive use
 
@@ -121,13 +121,18 @@ Sessions to add (2)
 
 Plan: add 2 session(s) (3 index file(s) in 2 account(s))
 
-Write now? [y/N]
+What next?
+  1) Write the plan above  (Enter)
+  2) Pick accounts/sessions first, then write
+  3) Undo the most recent write
+  q) Quit without writing
 ```
 
 - Each session is listed once, with the accounts it goes to (`→`). Up to 20 are shown; `-v` lists all of them, plus session IDs and extra statistics. `-q` prints only the summary and warnings.
-- **Prompts only appear in a terminal.** When both input and output are a terminal, the preview ends with `Write now? [y/N]` — press `y` to write without re-running, or Enter to keep it a preview. If the desktop app is still running, it waits for you to quit it and press Enter. Scripts, pipes, and CI never get a question; `--no-input` turns prompts off in a terminal too.
+- **Prompts only appear in a terminal.** When both input and output are a terminal, the preview ends with a menu: Enter (or `1`/`y`) writes without re-running, `2` lets you pick accounts and sessions first, `3` undoes the most recent write (shown when there is one), and `q` (or `n`) quits without writing. If the desktop app is still running, it waits for you to quit it and press Enter. Scripts, pipes, and CI never get a question; `--no-input` turns prompts off in a terminal too.
+- **Questions come up only when they matter.** If sessions were written in the last 2 minutes, a terminal run lists them and asks whether to sync them too (default: no). If archived sessions can be purged, it offers to delete them when you write (type `yes`; Enter keeps them). `--[no-]include-recent` and `--[no-]purge-archived`, or the same keys in `config.toml`, answer these in advance.
 - `-i` / `--interactive` shows numbered lists of accounts (when more than one has something to add) and sessions to pick from. Press Enter for all, or type `1-5,8` to pick, `!3` to leave one out, `none`, or `q` to cancel. Sessions you leave out can be remembered in `~/.claude-desktop-sync/exclude.txt`, which every later run reads automatically; delete a line there to sync that session again.
-- In a terminal, `--purge-archived` only deletes after you type `yes`, and `--undo` shows what the last run did and asks first.
+- In a terminal, purging only happens after you type `yes`, and `--undo` shows what the last run did and asks first.
 - `--json` prints the plan (and, with `--apply`, what was written) as JSON for scripts. It never prompts and has no colors.
 - Colors are used only in a terminal. `NO_COLOR` is honored; `--color always|never` overrides. If the terminal can't show symbols such as `✓` or `→`, ASCII is used instead.
 
@@ -174,6 +179,20 @@ claude-session-sync --purge-archived --apply   # do it
 - in a terminal, deletion only happens after you type `yes`; anything else keeps the archived sessions and still runs the sync;
 - backups are not cleaned up automatically; once you're happy, delete `~/.claude-desktop-sync/trash-*` yourself.
 
+### Defaults (`config.toml`)
+
+Options you'd otherwise type every time can live in `~/.claude-desktop-sync/config.toml`. Command-line options always win.
+
+```toml
+lang = "zh"                 # en | zh
+color = "auto"              # auto | always | never
+purge_archived = true       # leave out to be asked in a terminal
+include_recent = false      # leave out to be asked in a terminal
+per_account_archive = false
+```
+
+`--save-defaults` writes the current run's values of these options to the file, for example `claude-session-sync --lang zh --no-include-recent --save-defaults`. Delete a line to go back to the built-in default. Language is picked from `--lang`, then `CLAUDE_SESSION_SYNC_LANG`, then `config.toml`, then the locale.
+
 ---
 
 ## Options
@@ -182,7 +201,7 @@ claude-session-sync --purge-archived --apply   # do it
 |---|---|
 | `-h`, `--help` | Show help, examples, and caveats |
 | `-V`, `--version` | Show the version |
-| `--lang en\|zh` | Output language; overrides `CLAUDE_SESSION_SYNC_LANG` and the locale |
+| `--lang en\|zh` | Output language; overrides `CLAUDE_SESSION_SYNC_LANG`, `config.toml`, and the locale |
 | (no options) | Preview mode |
 | `--apply` | Actually write |
 | `--undo` | Undo the most recent write or deletion |
@@ -192,9 +211,10 @@ claude-session-sync --purge-archived --apply   # do it
 | `--project <string>` | Only handle sessions whose working directory contains this string (sync and purge) |
 | `--exclude <session-id>` | Exclude a session from sync and purge; repeatable |
 | `--exclude-file <file>` | Read excluded session IDs from a file, one per line; text after `#` is a comment. `~/.claude-desktop-sync/exclude.txt` is always read as well |
-| `--include-recent` | Also sync sessions written in the last 2 minutes (possibly still running). They are marked in the output; purging still skips them |
-| `--per-account-archive` | Only exclude sessions archived in the same account |
-| `--purge-archived` | Permanently delete archived sessions after syncing (see above) |
+| `--[no-]include-recent` | Also sync (or never sync) sessions written in the last 2 minutes (possibly still running). They are marked in the output; purging still skips them. Unset: asked in a terminal |
+| `--[no-]per-account-archive` | Only exclude sessions archived in the same account |
+| `--[no-]purge-archived` | Permanently delete (or never delete) archived sessions after syncing (see above). Unset: offered in a terminal when there are any |
+| `--save-defaults` | Save this run's `--lang`, `--color`, and the `--[no-]…` options above to `config.toml`, then continue |
 | `--projects-dir <path>` | CLI sessions directory; defaults to `~/.claude/projects` and honors `CLAUDE_CONFIG_DIR` |
 | `--desktop-root <path>` | Path to a `claude-code-sessions` directory; repeatable |
 | `--force` | Run `--apply` or `--undo` even while the desktop app is running (not recommended; the app may overwrite the changes) |

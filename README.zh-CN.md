@@ -97,9 +97,9 @@ claude-session-sync --undo
 
 > 如果提示"检测到桌面端正在运行"，说明桌面端还挂在菜单栏或托盘里，**这次什么都没有写入**。彻底退出后重新运行即可（在终端里会等你退出后继续）。
 
-在终端里可以省掉第 2 步：预览最后会问"现在写入？[y/N]"。详见[输出与交互](#输出与交互)。
+在终端里可以省掉第 2 步：预览最后会出现一个菜单，直接回车就写入。详见[输出与交互](#输出与交互)。
 
-系统语言（`LC_ALL`、`LC_MESSAGES`、`LANG`，或 Windows 的显示语言）是中文时输出中文，否则输出英文。临时切换加 `--lang zh` 或 `--lang en`；想长期使用中文，又不想改系统语言，在 shell 配置文件（如 `~/.zshrc`）里加上 `export CLAUDE_SESSION_SYNC_LANG=zh`。
+系统语言（`LC_ALL`、`LC_MESSAGES`、`LANG`，或 Windows 的显示语言）是中文时输出中文，否则输出英文。临时切换加 `--lang zh` 或 `--lang en`；想长期使用中文，又不想改系统语言，运行一次 `--lang zh --save-defaults`（见[默认设置](#默认设置configtoml)），或者在 shell 配置文件（如 `~/.zshrc`）里加上 `export CLAUDE_SESSION_SYNC_LANG=zh`。
 
 ## 输出与交互
 
@@ -121,13 +121,18 @@ CLI 会话 125 个 · 桌面端账号 3 个
 
 计划：补 2 个会话（2 个账号共 3 个索引文件）
 
-现在写入？ [y/N]
+接下来做什么？
+  1) 按上面的计划写入  （回车）
+  2) 先挑选账号/会话，再写入
+  3) 撤销最近一次写入
+  q) 不写入，退出
 ```
 
 - 每个会话只列一次，`→` 后面是它要补进去的账号。默认最多列 20 个；`-v` 列出全部，并显示会话 ID 和更多统计；`-q` 只输出汇总和提醒。
-- **只有在终端里才会提问。** 输入和输出都是终端时，预览最后会问"现在写入？[y/N]"：按 `y` 直接写入，不用再跑一遍；直接回车就只是预览。如果桌面端还开着，会等你退出后按回车继续。脚本、管道、CI 里永远不会提问；在终端里也不想被问，加 `--no-input`。
+- **只有在终端里才会提问。** 输入和输出都是终端时，预览最后会出现菜单：回车（或 `1`、`y`）直接写入，不用再跑一遍；`2` 先挑选账号和会话；`3` 撤销最近一次写入（有可撤销的记录时才显示）；`q`（或 `n`）不写入直接退出。如果桌面端还开着，会等你退出后按回车继续。脚本、管道、CI 里永远不会提问；在终端里也不想被问，加 `--no-input`。
+- **只在需要时才问。** 有最近 2 分钟内仍在写入的会话时，在终端里会列出来，问要不要一并同步（默认不同步）；有可以清除的已归档会话时，写入时会问要不要顺便删除（输入 `yes` 删除，回车保留）。用 `--[no-]include-recent`、`--[no-]purge-archived`，或在 `config.toml` 里设置同名的键，就可以预先回答，不再询问。
 - `-i` / `--interactive` 会列出带编号的账号（有多个账号要补时）和会话供你挑选。回车 = 全部；输入 `1-5,8` 选择，`!3` 排除某一项，`none` 一个都不选，`q` 取消。没选的会话可以记到 `~/.claude-desktop-sync/exclude.txt`，以后每次运行都会自动排除；删掉对应行即可恢复同步。
-- 在终端里，`--purge-archived` 要你输入 `yes` 才会删除；`--undo` 会先显示上一次运行做了什么，确认后再撤销。
+- 在终端里，清除已归档会话要你输入 `yes` 才会删除；`--undo` 会先显示上一次运行做了什么，确认后再撤销。
 - `--json` 以 JSON 输出同步计划（加 `--apply` 时还包括写入结果），方便脚本使用；它不会提问，也不带颜色。
 - 只在终端里使用颜色，遵循 `NO_COLOR`，也可以用 `--color always|never` 指定。终端显示不了 `✓`、`→` 这类符号时自动换成 ASCII。
 
@@ -174,6 +179,20 @@ claude-session-sync --purge-archived --apply   # 执行
 - 在终端里要输入 `yes` 才会删除，输入别的会保留已归档会话，同步照常进行；
 - 备份目录不会自动清理，确认没问题后可以手动删除 `~/.claude-desktop-sync/trash-*`。
 
+### 默认设置（`config.toml`）
+
+每次都要输的参数，可以写进 `~/.claude-desktop-sync/config.toml`。命令行参数总是优先。
+
+```toml
+lang = "zh"                 # en | zh
+color = "auto"              # auto | always | never
+purge_archived = true       # 不写这一行：在终端里当场询问
+include_recent = false      # 不写这一行：在终端里当场询问
+per_account_archive = false
+```
+
+`--save-defaults` 会把本次运行中这几个参数的取值写进文件，例如 `claude-session-sync --lang zh --no-include-recent --save-defaults`。删掉某一行就恢复内置默认值。输出语言依次看 `--lang`、`CLAUDE_SESSION_SYNC_LANG`、`config.toml`、系统语言。
+
 ---
 
 ## 参数
@@ -182,7 +201,7 @@ claude-session-sync --purge-archived --apply   # 执行
 |---|---|
 | `-h`, `--help` | 显示帮助、示例和注意事项 |
 | `-V`, `--version` | 显示版本号 |
-| `--lang en\|zh` | 输出语言，优先于 `CLAUDE_SESSION_SYNC_LANG` 和系统语言 |
+| `--lang en\|zh` | 输出语言，优先于 `CLAUDE_SESSION_SYNC_LANG`、`config.toml` 和系统语言 |
 | （不加参数） | 预览模式 |
 | `--apply` | 实际写入 |
 | `--undo` | 撤销最近一次写入或删除 |
@@ -192,9 +211,10 @@ claude-session-sync --purge-archived --apply   # 执行
 | `--project <字符串>` | 只处理工作目录里包含这个字符串的会话（同步和清除都生效） |
 | `--exclude <会话ID>` | 排除某个会话，同步和清除都跳过，可以写多次 |
 | `--exclude-file <文件>` | 从文件读取排除列表，每行一个会话 ID，`#` 后面是注释。`~/.claude-desktop-sync/exclude.txt` 总是会一并读取 |
-| `--include-recent` | 同步时不跳过最近 2 分钟内仍在写入的会话（可能正在运行），输出里会单独标出；清除时仍然跳过 |
-| `--per-account-archive` | 只按当前账号的归档状态来排除 |
-| `--purge-archived` | 同步后彻底删除已归档会话（见上一节） |
+| `--[no-]include-recent` | 同步（或始终不同步）最近 2 分钟内仍在写入的会话（可能正在运行），输出里会单独标出；清除时仍然跳过。不指定时在终端里询问 |
+| `--[no-]per-account-archive` | 只按当前账号的归档状态来排除 |
+| `--[no-]purge-archived` | 同步后彻底删除（或始终不删除）已归档会话（见上一节）。不指定时，在终端里发现可清除的会话会询问 |
+| `--save-defaults` | 把本次的 `--lang`、`--color` 和上面几个 `--[no-]…` 参数保存到 `config.toml`，然后照常运行 |
 | `--projects-dir <路径>` | CLI 会话目录，默认 `~/.claude/projects`，也会读取 `CLAUDE_CONFIG_DIR` |
 | `--desktop-root <路径>` | 手动指定 `claude-code-sessions` 目录，可以写多次 |
 | `--force` | 桌面端正在运行时也强制执行 `--apply` 或 `--undo`（不推荐，桌面端可能覆盖掉改动） |
