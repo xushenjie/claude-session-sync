@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- Boxed panels are separated by a blank line.
+- Sessions get their own icon (`◇`, `💬` with `--icons emoji`); `⏳` now only marks running sessions.
+- Session times always include the year (`2026-11-12 11:22`); sessions from earlier years keep their time of day.
+
 ## [0.4.0] - 2026-11-12
 
 ### Added

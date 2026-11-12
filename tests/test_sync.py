@@ -1497,3 +1497,39 @@ def test_boxed_purge_panel_is_aligned(env, monkeypatch, capsys):
     lines = [line for line in capsys.readouterr().out.splitlines() if line and line[0] in "╭│├╰"]
     assert any("title of old" in line for line in lines)  # 清除列表显示索引里记录的标题
     assert all(cli.disp_width(line) == 80 for line in lines)
+
+
+# ---------------------------------------------------------------- 面板间距、会话图标、时间
+
+
+def test_boxed_panels_are_separated_by_a_blank_line(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "80")
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run("--layout", "boxed")
+    out = capsys.readouterr().out.split("\n")
+    for i, line in enumerate(out):
+        if line.startswith("╰") and i + 1 < len(out) and out[i + 1].strip():
+            assert out[i + 1] == "" or not out[i + 1].startswith("╭"), "panels must not touch"
+    tops = [i for i, x in enumerate(out) if x.startswith("╭")]
+    assert len(tops) >= 3 and all(out[i - 1] == "" for i in tops[1:])
+
+
+def test_sessions_show_chat_icon_and_full_date(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "80")
+    env.add_index("existing")
+    env.add_cli_session("new-1", text="一个中文标题")
+    env.run("--layout", "boxed", "--icons", "emoji")
+    lines = boxed_lines(capsys)
+    assert all(cli.disp_width(x) == 80 for x in lines if x[0] in "╭│├╰")
+    row = next(x for x in lines if "一个中文标题" in x)
+    assert re.search(r"💬 \d{4}-\d{2}-\d{2} \d{2}:\d{2}  一个中文标题", row)
+    env.run("--layout", "plain", "--icons", "symbols")
+    assert re.search(r"◇ \d{4}-\d{2}-\d{2} \d{2}:\d{2}  一个中文标题", capsys.readouterr().out)
+
+
+def test_format_time_always_has_year():
+    import time as _time
+
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", cli.format_time(_time.time() * 1000))
+    assert cli.format_time(_time.mktime((2020, 3, 4, 5, 6, 0, 0, 0, -1)) * 1000) == "2020-03-04 05:06"

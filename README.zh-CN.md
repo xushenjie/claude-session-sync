@@ -353,15 +353,15 @@ compdef css=claude-session-sync
 桌面端只按 ID 存放账号，所以输出里会尽量把能找到的名称显示出来：
 
 ```text
-│ ● │ 工作号 · Acme Inc · fan***@example.com  当前 CLI │ b8073c71/677f8bdf │
-│ ● │ 07ac42e2/00000000                                │                   │
+│ ● │ 工作号 · Acme Inc · dan***@example.com  当前 CLI │ 1a2b3c4d/0c1d2e3f │
+│ ● │ 3c4d5e6f/00000000                                │                   │
 ```
 
 - **CLI 当前登录的账号**：从 `~/.claude.json` 自动识别（只读取账号和组织 ID、邮箱、组织名）。
 - **CLI 以前登录过的账号**：每次 `--apply` 都会把当前 CLI 账号记到 `~/.claude-desktop-sync/accounts.json`，切换账号后仍然能显示名称。
-- **任意账号**：自己起别名。在菜单里按 `n`，或运行 `claude-session-sync --set-alias`，从列表里选账号后修改它现在的名称；也可以一步写完：`--set-alias b8073c71=工作号`。写成 `<账号>/<组织>` 前缀可以只给某个组织起名；名称留空则删除别名。
+- **任意账号**：自己起别名。在菜单里按 `n`，或运行 `claude-session-sync --set-alias`，从列表里选账号后修改它现在的名称；也可以一步写完：`--set-alias 1a2b3c4d=工作号`。写成 `<账号>/<组织>` 前缀可以只给某个组织起名；名称留空则删除别名。
 
-邮箱始终打码显示（如 `fan***@example.com`），因为这份输出经常会被贴进 issue。预览模式不会写入 `accounts.json`。
+邮箱始终打码显示（如 `dan***@example.com`），因为这份输出经常会被贴进 issue。预览模式不会写入 `accounts.json`。
 
 ---
 
