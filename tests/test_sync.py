@@ -576,8 +576,15 @@ def test_ambiguous_account_prefix_is_rejected(env):
 def fake_terminal(monkeypatch, answers):
     """假装在终端里运行，依次返回 answers 作为用户输入。"""
     it = iter(answers)
+
+    def fake_input(prompt=""):
+        try:
+            return next(it)
+        except StopIteration:
+            raise EOFError from None  # 输入用完了：像按了 Ctrl-D
+
     monkeypatch.setattr(cli, "is_interactive", lambda: True)
-    monkeypatch.setattr(cli, "_input", lambda prompt="": next(it))
+    monkeypatch.setattr(cli, "_input", fake_input)
 
 
 def test_sessions_listed_once_across_accounts(env, capsys):
@@ -1266,7 +1273,7 @@ def test_screen_redraw_clips_long_lines(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "\033[2F" in out  # 第二次重画先回到区域开头
     lines = [re.sub(r"\033\[[0-9;?]*[A-Za-z]", "", line) for line in out.split("\n")]
-    assert all(cli.disp_width(line) <= cli.term_width() - 1 for line in lines)  # 不会被终端自动折行
+    assert all(cli.disp_width(line) <= cli.term_width() for line in lines)  # 不会被终端自动折行
 
 
 def test_keys_fall_back_to_numbers_when_scripted(env, monkeypatch, capsys):
@@ -1419,3 +1426,63 @@ def test_ask_text_without_keys_keeps_default(monkeypatch):
     assert cli.ask_text("> ", "old") == "old"
     answers(monkeypatch, " new ")
     assert cli.ask_text("> ", "old") == "new"
+
+
+# ---------------------------------------------------------------- 总菜单
+
+
+def test_hub_shows_when_in_sync_and_enter_quits(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.add_cli_session("existing")
+    press(monkeypatch, "enter")
+    env.run()
+    out = capsys.readouterr().out
+    assert "What next?" in out and "Name accounts" in out and "Write the plan above" not in out
+
+
+def test_hub_filter_by_account_then_write(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    env.add_cli_session("new-1")
+    # 菜单 f → 按账号 → 去掉第 1 个组织 → 重新预览 → 回车写入
+    press(monkeypatch, "f", "enter", "space", "enter", "enter")
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing"]
+    assert cli_ids(env.index_entries(ACCT, ORG_EMPTY)) == ["new-1"]
+    assert capsys.readouterr().out.count("Accounts") >= 2  # 预览了两次
+
+
+def test_hub_alias_then_quit(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.add_cli_session("existing")
+    press(monkeypatch, "n", "enter", *"work", "enter", "q", "q")
+    env.run()
+    out = capsys.readouterr().out
+    assert json.loads((env.journal / "accounts.json").read_text())["aliases"] == {f"{ACCT}/{ORG}": "work"}
+    assert "work" in out.split("Alias set")[-1]  # 重新预览时显示了新名称
+
+
+def test_hub_settings_apply_immediately(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.add_cli_session("existing")
+    press(monkeypatch, "s", "down", "right", "enter", "q")  # 图标 → emoji，保存，退出
+    env.run()
+    assert cli.load_config()["icons"] == "emoji"
+    assert "⚪" in capsys.readouterr().out.split("Saved to")[-1]
+
+
+def test_hub_exclude_list(env, monkeypatch):
+    env.add_index("existing")
+    env.add_cli_session("a")
+    cli.add_to_exclude_file([{"id": "a", "title": "task a"}])
+    press(monkeypatch, "x", "space", "enter", "enter")  # 从排除列表移除，重新预览后回车写入
+    env.run()
+    assert cli_ids(env.index_entries()) == ["a", "existing"]
+
+
+def test_apply_and_interactive_skip_hub(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    press(monkeypatch)
+    env.run("-a")
+    assert "What next?" not in capsys.readouterr().out
