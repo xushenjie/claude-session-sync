@@ -410,6 +410,26 @@ def text_of(content):
     return ""
 
 
+def is_model_reply(o):
+    """真正由模型生成的回复（含文本或工具调用）；不算 CLI 本地命令产生的 <synthetic> 占位消息。"""
+    msg = o.get("message") or {}
+    if o.get("isSidechain") or msg.get("model") == "<synthetic>":
+        return False
+    content = msg.get("content")
+    return isinstance(content, list) and any(
+        isinstance(part, dict) and part.get("type") in ("text", "tool_use") for part in content
+    )
+
+
+def command_title(txt):
+    """从斜杠命令消息里取出 "/命令 参数" 作为后备标题。"""
+    name = re.search(r"<command-name>(.*?)</command-name>", txt, re.S)
+    if not name:
+        return None
+    args = re.search(r"<command-args>(.*?)</command-args>", txt, re.S)
+    return f"{name.group(1).strip()} {args.group(1).strip() if args else ''}".strip()
+
+
 def is_abs_any(p):
     """不管当前是什么系统，POSIX 或 Windows 风格的绝对路径都算。
     （Python 3.13 起 Windows 上 os.path.isabs("/x") 返回 False，而记录可能来自别的系统。）"""
@@ -426,11 +446,14 @@ def use_safe_stdio():
 
 
 def parse_session(path):
-    """读取 .jsonl，返回会话信息；没有用户消息或没有 cwd 的返回 None。"""
+    """读取 .jsonl，返回会话信息；没有 cwd、或既没有用户正文也没有模型回复的返回 None。
+
+    以斜杠命令（/implement 等）或 IDE 注入内容开头的会话，用户消息都以 "<" 开头，
+    只要模型真的回复过就算有效会话；只执行过 /model、/clear 这类本地命令的仍然跳过。"""
     cwd = None
     first_ts = last_ts = None
-    custom_title = summary = first_user = None
-    has_user = False
+    custom_title = summary = ai_title = first_user = first_command = None
+    has_user = has_reply = False
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -456,19 +479,25 @@ def parse_session(path):
                     custom_title = o["customTitle"]
                 elif kind == "summary" and o.get("summary"):
                     summary = o["summary"]
+                elif kind == "ai-title" and o.get("aiTitle"):
+                    ai_title = o["aiTitle"]
+                elif kind == "assistant" and not has_reply:
+                    has_reply = is_model_reply(o)
                 elif kind == "user" and not o.get("isSidechain") and not o.get("isMeta"):
                     msg = o.get("message") or {}
                     txt = text_of(msg.get("content")).strip()
                     if txt and not txt.startswith("<"):  # 跳过命令/系统注入内容
                         has_user = True
                         first_user = first_user or txt
+                    elif txt:
+                        first_command = first_command or command_title(txt)
     except OSError as e:
         print(t(f"  ! Cannot read {path}: {e}", f"  ! 无法读取 {path}: {e}"), file=sys.stderr)
         return None
-    if not has_user or not cwd:
+    if not (has_user or has_reply) or not cwd:
         return None
     mtime_ms = int(path.stat().st_mtime * 1000)
-    title = (custom_title or summary or first_user or path.stem).replace("\n", " ").strip()
+    title = (custom_title or summary or ai_title or first_user or first_command or path.stem).replace("\n", " ").strip()
     if len(title) > TITLE_MAX:
         title = title[: TITLE_MAX - 1] + "…"
     return {

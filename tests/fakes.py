@@ -26,7 +26,10 @@ class Env:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def add_cli_session(self, sid, cwd="/work/demo", text="hello", project="-work-demo", mtime=OLD, extra=()):
+    def add_cli_session(
+        self, sid, cwd="/work/demo", text="hello", project="-work-demo", mtime=OLD, extra=(), reply=True
+    ):
+        """reply=False 时助手消息是本地命令留下的 <synthetic> 占位，不算模型回复。"""
         d = self.projects / project
         d.mkdir(exist_ok=True)
         lines = [
@@ -40,7 +43,11 @@ class Env:
                 "type": "assistant",
                 "cwd": cwd,
                 "timestamp": "2026-01-01T00:01:00.000Z",
-                "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+                "message": {
+                    "role": "assistant",
+                    "model": "test-model" if reply else "<synthetic>",
+                    "content": [{"type": "text", "text": "hi"}],
+                },
             },
             *extra,
         ]

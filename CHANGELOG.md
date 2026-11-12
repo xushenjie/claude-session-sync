@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Sessions that start with a slash command (such as `/implement`) or an IDE notice are no longer skipped as empty. A session now counts when it has user text or a real model reply; sessions that only ran a local command such as `/model` are still skipped. Titles fall back to the session's AI title, then to the command and its arguments.
+
 ## [0.3.2] - 2026-11-11
 
 ### Added
