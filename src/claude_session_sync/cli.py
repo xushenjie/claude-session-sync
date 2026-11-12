@@ -496,6 +496,462 @@ def choose(items, question):
         warn(t(f"Use numbers between 1 and {len(items)}.", f"请输入 1 到 {len(items)} 之间的编号。"))
 
 
+# ---------------------------------------------------------------- 方向键选择
+#
+# 只用标准库：POSIX 用 termios 逐键读取，Windows 用 msvcrt。读不了单个按键时（不是终端、
+# TERM=dumb、ui = "simple"）退回到输入编号，功能一样。测试里把 _keys 换成按键序列。
+
+_UI = "keys"  # keys | simple，见 config.toml 的 ui
+_keys = None  # 测试用：按键名的迭代器
+
+KEY_HINT_ONE = ("↑↓ move · Enter select · Esc back", "↑↓ 移动 · 回车确认 · Esc 返回")
+KEY_HINT_MANY = (
+    "↑↓ move · Space toggle · a all · / filter · Enter confirm · Esc back",
+    "↑↓ 移动 · 空格勾选 · a 全选 · / 筛选 · 回车确认 · Esc 返回",
+)
+KEY_HINT_FORM = ("↑↓ field · ←→ change · Enter save · Esc discard", "↑↓ 选项 · ←→ 改值 · 回车保存 · Esc 放弃")
+
+
+def keys_available():
+    if _keys is not None:
+        return True
+    if _UI != "keys" or os.environ.get("TERM") == "dumb" or _input is not input:
+        return False  # _input 被替换说明输入来自脚本（测试），按行读取
+    try:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
+        sys.stdin.fileno()
+    except (AttributeError, ValueError, OSError):
+        return False
+    try:
+        if os.name == "nt":
+            import msvcrt  # noqa: F401
+        else:
+            import termios  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class RawKeys:
+    """进入逐键读取模式，退出时一定恢复终端（Ctrl-C、出错也一样）。"""
+
+    def __enter__(self):
+        self.saved = None
+        if _keys is None and os.name != "nt":
+            import termios
+            import tty
+
+            self.fd = sys.stdin.fileno()
+            self.saved = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+        sys.stdout.write("\033[?25l")  # 隐藏光标
+        sys.stdout.flush()
+        return self
+
+    def __exit__(self, *exc):
+        if self.saved is not None:
+            import termios
+
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+        return False
+
+
+POSIX_KEYS = {
+    "[A": "up",
+    "[B": "down",
+    "[C": "right",
+    "[D": "left",
+    "[H": "home",
+    "[F": "end",
+    "OA": "up",
+    "OB": "down",
+    "OC": "right",
+    "OD": "left",
+    "OH": "home",
+    "OF": "end",
+    "[1~": "home",
+    "[4~": "end",
+    "[5~": "pgup",
+    "[6~": "pgdn",
+}
+WIN_KEYS = {"H": "up", "P": "down", "K": "left", "M": "right", "G": "home", "O": "end", "I": "pgup", "Q": "pgdn"}
+
+
+def read_key():
+    """读一个按键，返回 up/down/left/right/home/end/pgup/pgdn/enter/space/esc/backspace/tab 或字符本身。"""
+    if _keys is not None:
+        return next(_keys)
+    if os.name == "nt":
+        import msvcrt
+
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            return WIN_KEYS.get(msvcrt.getwch(), "")
+    else:
+        import select
+
+        fd = sys.stdin.fileno()
+        b = os.read(fd, 1)
+        if b == b"\x1b":
+            seq = b""
+            while select.select([fd], [], [], 0.03)[0]:
+                seq += os.read(fd, 1)
+                if seq[-1:].isalpha() or seq[-1:] == b"~":
+                    break
+            return POSIX_KEYS.get(seq.decode("ascii", "replace"), "esc" if not seq else "")
+        if b and b[0] >= 0xC0:  # UTF-8 多字节字符
+            need = 1 if b[0] < 0xE0 else 2 if b[0] < 0xF0 else 3
+            b += os.read(fd, need)
+        ch = b.decode("utf-8", "replace")
+    if ch == "\x03":
+        raise KeyboardInterrupt
+    return {
+        "\r": "enter",
+        "\n": "enter",
+        " ": "space",
+        "\x1b": "esc",
+        "\x7f": "backspace",
+        "\x08": "backspace",
+        "\t": "tab",
+    }.get(ch, ch)
+
+
+class Screen:
+    """在原地重画一块区域：每次先把光标移回区域开头再清到屏幕底部。"""
+
+    def __init__(self):
+        self.height = 0
+
+    def draw(self, lines):
+        width = term_width() - 1
+        out = []
+        if self.height:
+            out.append(f"\033[{self.height}F")
+        out.append("\033[J")
+        out.append("\n".join(clip(line, width) for line in lines) + "\n")
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
+        self.height = len(lines)
+
+    def clear(self):
+        if self.height:
+            sys.stdout.write(f"\033[{self.height}F\033[J")
+            sys.stdout.flush()
+        self.height = 0
+
+
+def clip(line, width):
+    """按显示宽度截断已上色的一行（跳过颜色控制码），避免终端自动折行打乱重画。"""
+    if disp_width(line) <= width:
+        return line
+    out, used, i = [], 0, 0
+    while i < len(line):
+        m = ANSI_RE.match(line, i)
+        if m:
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        w = char_width(line[i])
+        if used + w > width:
+            break
+        out.append(line[i])
+        used += w
+        i += 1
+    return "".join(out) + ("\033[0m" if _COLOR else "")
+
+
+def frame(title, hint, body):
+    """选择界面的外框：框线布局时画面板，按键提示放在标题栏右侧；否则标题 + 提示两行。"""
+    if _BOXES:
+        return panel(title, body, right=t(*hint))
+    return [style(title, "bold") + "  " + muted(t(*hint))] + body
+
+
+def visible_rows():
+    return max(5, shutil.get_terminal_size((100, 24)).lines - 8)
+
+
+def window(n, cursor, size):
+    """长列表只显示光标附近的一段。"""
+    if n <= size:
+        return 0, n
+    start = min(max(0, cursor - size // 2), n - size)
+    return start, start + size
+
+
+def option_line(o, selected, inner, mark=None):
+    """一行选项：光标、勾选框、标签、右侧说明。"""
+    pointer = style(sym("sel"), "cyan", "bold") if selected else " "
+    box = ""
+    if mark is not None:
+        box = (todo("[x]") if mark else muted("[ ]")) + " "
+    label = o["label"]
+    note = o.get("note", "")
+    left_w = inner - 2 - disp_width(box) - (disp_width(note) + 2 if note else 0)
+    text = fit(label, max(8, left_w))
+    if selected:
+        text = style(text, "bold")
+    line = f"{pointer} {box}{text}"
+    if note:
+        line += " " * max(2, inner - disp_width(line) - disp_width(note)) + muted(note)
+    return line
+
+
+def select_one(title, options, default=0):
+    """单选。options：[{"label", "note"?, "key"?, "value"?, "sep"?}]；sep 为分隔行，不可选。
+    返回选中项的 value（没有 value 时返回下标）；Esc / q 返回 None。"""
+    choices = [i for i, o in enumerate(options) if not o.get("sep")]
+    if not choices:
+        return None
+    if not keys_available():
+        return select_one_simple(title, options, default)
+    cursor = default if default in choices else choices[0]
+    screen = Screen()
+    with RawKeys():
+        while True:
+            inner = (panel_width() if _BOXES else term_width()) - 4
+            start, end = window(len(options), cursor, visible_rows())
+            body = []
+            for i in range(start, end):
+                o = options[i]
+                body.append(muted("  " + o["label"]) if o.get("sep") else option_line(o, i == cursor, inner))
+            screen.draw(frame(title, KEY_HINT_ONE, body))
+            key = read_key()
+            pos = choices.index(cursor)
+            if key in ("up", "k"):
+                cursor = choices[(pos - 1) % len(choices)]
+            elif key in ("down", "j", "tab"):
+                cursor = choices[(pos + 1) % len(choices)]
+            elif key in ("home", "pgup"):
+                cursor = choices[0]
+            elif key in ("end", "pgdn"):
+                cursor = choices[-1]
+            elif key == "enter":
+                break
+            elif key in ("esc", "q"):
+                screen.clear()
+                return None
+            else:
+                hit = next((i for i in choices if options[i].get("key") == key), None)
+                if hit is None and key.isdigit() and 0 < int(key) <= len(choices):
+                    hit = choices[int(key) - 1]
+                if hit is not None:  # 数字键或快捷键直接选中
+                    cursor = hit
+                    break
+    screen.clear()
+    o = options[cursor]
+    print(muted(f"{title}: ") + o["label"])
+    return o.get("value", cursor)
+
+
+def select_one_simple(title, options, default=0):
+    """select_one 的编号输入版本：每项一个按键（默认是序号），回车选默认项。"""
+    print()
+    print(style(title, "bold"))
+    keyed, n = [], 0
+    for i, o in enumerate(options):
+        if o.get("sep"):
+            print(muted("  " + o["label"]))
+            continue
+        n += 1
+        key = o.get("key") or str(n)
+        keyed.append((key, i))
+        enter = muted(t("  (Enter)", "  （回车）")) if i == default else ""
+        note = muted(f"  {o['note']}") if o.get("note") else ""
+        label = style(o["label"], "bold") if i == default else o["label"]
+        print(f"  {style(f'[{key}]', 'bold')} {label}{note}{enter}")
+    aliases = {"y": "yes", "n": "no"}
+    while True:
+        answer = ask(t("Choose: ", "请选择："))
+        if answer is None:
+            return None
+        answer = answer.strip().lower()
+        if not answer:
+            idx = default
+        else:
+            answer = aliases.get(answer, answer)
+            idx = next((i for k, i in keyed if k == answer or options[i].get("alias") == answer), None)
+            if idx is None and answer in ("q", "quit"):
+                return None
+        if idx is not None and not options[idx].get("sep"):
+            return options[idx].get("value", idx)
+        warn(t("Please choose one of the options above.", "请输入上面列出的选项。"))
+
+
+def select_many(title, options, selected=None):
+    """多选。返回选中项的下标列表；Esc 返回 None。selected 默认全选。"""
+    n = len(options)
+    marks = set(range(n)) if selected is None else set(selected)
+    if not keys_available():
+        return select_many_simple(title, options)
+    cursor, query, typing = 0, "", False
+    screen = Screen()
+    with RawKeys():
+        while True:
+            shown = [i for i in range(n) if query.lower() in options[i]["label"].lower()]
+            if shown and cursor not in shown:
+                cursor = shown[0]
+            inner = (panel_width() if _BOXES else term_width()) - 4
+            pos = shown.index(cursor) if shown else 0
+            start, end = window(len(shown), pos, visible_rows())
+            body = [option_line(options[i], i == cursor, inner, mark=i in marks) for i in shown[start:end]]
+            status = t(f"{len(marks)}/{n} selected", f"已选 {len(marks)}/{n}")
+            if query or typing:
+                status += "   " + t("filter: ", "筛选：") + query + ("▏" if typing else "")
+            if start > 0 or end < len(shown):
+                status += "   " + t(f"{pos + 1}/{len(shown)}", f"第 {pos + 1}/{len(shown)} 项")
+            body.append(muted(status))
+            screen.draw(frame(title, KEY_HINT_MANY, body))
+            key = read_key()
+            if typing:  # 正在输入筛选文字
+                if key == "enter" or key == "esc":
+                    typing = False
+                    if key == "esc":
+                        query = ""
+                elif key == "backspace":
+                    query = query[:-1]
+                elif len(key) == 1 and key.isprintable():
+                    query += key
+                elif key == "space":
+                    query += " "
+                continue
+            if key in ("up", "k") and shown:
+                cursor = shown[(pos - 1) % len(shown)]
+            elif key in ("down", "j", "tab") and shown:
+                cursor = shown[(pos + 1) % len(shown)]
+            elif key in ("pgup", "left") and shown:
+                cursor = shown[max(0, pos - visible_rows())]
+            elif key in ("pgdn", "right") and shown:
+                cursor = shown[min(len(shown) - 1, pos + visible_rows())]
+            elif key == "home" and shown:
+                cursor = shown[0]
+            elif key == "end" and shown:
+                cursor = shown[-1]
+            elif key == "space" and shown:
+                marks ^= {cursor}
+            elif key == "a":
+                target = set(shown)
+                marks = marks - target if target <= marks else marks | target
+            elif key == "/":
+                typing = True
+            elif key == "enter":
+                break
+            elif key in ("esc", "q"):
+                screen.clear()
+                return None
+    screen.clear()
+    print(muted(f"{title}: ") + t(f"{len(marks)}/{n} selected", f"已选 {len(marks)}/{n}"))
+    return sorted(marks)
+
+
+def select_many_simple(title, options):
+    print()
+    print(style(title, "bold"))
+    for i, o in enumerate(options, 1):
+        note = muted(f"  {o['note']}") if o.get("note") else ""
+        print(f"  {i:>3}. {o['label']}{note}")
+    return choose(options, title)
+
+
+def edit_form(title, fields):
+    """设置表单：fields = [{"label", "choices": [(值, 显示文字)], "value": 当前值}]。
+    ←→ 切换取值，回车保存（返回 {label: 值}），Esc 放弃（返回 None）。"""
+    current = [next((i for i, (v, _) in enumerate(f["choices"]) if v == f["value"]), 0) for f in fields]
+    if not keys_available():
+        out = {}
+        for f, cur in zip(fields, current):
+            opts = [{"label": text, "value": v} for v, text in f["choices"]]
+            v = select_one_simple(f["label"], opts, default=cur)
+            if v is None:
+                return None
+            out[f["label"]] = v
+        return out
+    cursor = 0
+    screen = Screen()
+    label_w = max(disp_width(f["label"]) for f in fields)
+    with RawKeys():
+        while True:
+            body = []
+            for i, (f, cur) in enumerate(zip(fields, current)):
+                pointer = style(sym("sel"), "cyan", "bold") if i == cursor else " "
+                value = f"‹ {f['choices'][cur][1]} ›"
+                value = style(value, "cyan", "bold") if i == cursor else value
+                body.append(f"{pointer} {pad(f['label'], label_w)}   {value}")
+            screen.draw(frame(title, KEY_HINT_FORM, body))
+            key = read_key()
+            if key in ("up", "k"):
+                cursor = (cursor - 1) % len(fields)
+            elif key in ("down", "j", "tab"):
+                cursor = (cursor + 1) % len(fields)
+            elif key in ("left", "h"):
+                current[cursor] = (current[cursor] - 1) % len(fields[cursor]["choices"])
+            elif key in ("right", "l", "space"):
+                current[cursor] = (current[cursor] + 1) % len(fields[cursor]["choices"])
+            elif key == "enter":
+                break
+            elif key in ("esc", "q"):
+                screen.clear()
+                return None
+    screen.clear()
+    return {f["label"]: f["choices"][cur][0] for f, cur in zip(fields, current)}
+
+
+def ask_text(prompt, default=""):
+    """输入一行文字。POSIX 上把默认值预先填进输入框（回车保留、退格修改）；
+    其他情况提示默认值，直接回车保留。返回 None 表示取消。"""
+    prefilled = False
+    if default and _keys is None and _input is input and os.name != "nt":
+        try:
+            import readline
+
+            readline.set_startup_hook(lambda: readline.insert_text(default))
+            prefilled = True
+        except ImportError:
+            pass
+    shown = (
+        prompt
+        if prefilled or not default
+        else f"{prompt}" + muted(t(f"[Enter keeps “{default}”] ", f"［回车保留“{default}”］"))
+    )
+    try:
+        answer = ask(shown)
+    finally:
+        if prefilled:
+            import readline
+
+            readline.set_startup_hook(None)
+    if answer is None:
+        return None
+    answer = answer.strip()
+    return answer if (answer or prefilled) else default
+
+
+def confirm_key(question, default=False):
+    """是/否确认：能读单个按键时按 y / n / 回车即可，不用再按回车。"""
+    if not keys_available():
+        return confirm(question, default)
+    hint = "[Y/n]" if default else "[y/N]"
+    sys.stdout.write(f"{question} {hint} ")
+    sys.stdout.flush()
+    with RawKeys():
+        while True:
+            key = read_key()
+            if key in ("y", "Y"):
+                result = True
+            elif key in ("n", "N", "esc"):
+                result = False
+            elif key == "enter":
+                result = default
+            else:
+                continue
+            break
+    print(t("yes", "是") if result else t("no", "否"))
+    return result
+
+
 # ---------------------------------------------------------------- 路径发现
 
 
@@ -906,7 +1362,7 @@ def undo(force=False, interactive=False):
                 f"移除 {len(data.get('moved', []))} 个文件/目录。",
             )
         )
-        if not confirm(t("Undo it?", "撤销这次运行？")):
+        if not confirm_key(t("Undo it?", "撤销这次运行？")):
             print(t("Cancelled.", "已取消。"))
             return
     ensure_desktop_stopped(force, interactive)
@@ -1249,34 +1705,37 @@ def pick_interactively(rows):
     if not writable:
         return
     if len(writable) > 1:
-        print(style(t("Accounts with sessions to add:", "有待补会话的账号："), "bold"))
-        for i, r in enumerate(writable, 1):
-            print(f"  {i:>3}. {r['heading']}  " + t(f"to add {len(r['todo'])}", f"待补 {len(r['todo'])}"))
-        picked = choose(writable, t("Accounts to sync", "要同步的账号"))
+        options = [
+            {
+                "label": (r["name"].split(" · ")[0] if r.get("name") else r["ids"])
+                + (f"  {r['ids']}" if r.get("name") else ""),
+                "note": t(f"to add {len(r['todo'])}", f"待补 {len(r['todo'])}"),
+            }
+            for r in writable
+        ]
+        picked = select_many(t("Accounts to sync", "要同步的账号"), options)
         if picked is None:
             sys.exit(t(*CANCELLED))
         for i, r in enumerate(writable):
             if i not in picked:
                 r["todo"] = []
         writable = [writable[i] for i in picked]
-        print()
 
     order = sorted({s["id"]: s for r in writable for s in r["todo"]}.values(), key=lambda s: -s["lastActivityAt"])
     if not order:
         return
-    print(style(t(f"Sessions to add ({len(order)}):", f"待补会话（{len(order)} 个）："), "bold"))
-    col = max(16, (term_width() - 30) // 2)
-    for i, s in enumerate(order, 1):
-        cwd = style(fit(short_path(s["cwd"]), col), "dim")
-        print(f"  {i:>3}. {format_time(s['lastActivityAt'])}  {pad(fit(s['title'], col), col)}  {cwd}")
-    picked = choose(order, t("Sessions to sync", "要同步的会话"))
+    options = [
+        {"label": f"{format_time(s['lastActivityAt'])}  {s['title']}", "note": fit(short_path(s["cwd"]), 32)}
+        for s in order
+    ]
+    picked = select_many(t(f"Sessions to sync ({len(order)})", f"要同步的会话（{len(order)} 个）"), options)
     if picked is None:
         sys.exit(t(*CANCELLED))
     keep = {order[i]["id"] for i in picked}
     for r in writable:
         r["todo"] = [s for s in r["todo"] if s["id"] in keep]
     dropped = [s for s in order if s["id"] not in keep]
-    if dropped and confirm(
+    if dropped and confirm_key(
         t(
             f"Remember the {len(dropped)} session(s) you left out, so later runs skip them too?",
             f"记住没选的 {len(dropped)} 个会话，以后运行也自动跳过？",
@@ -1284,12 +1743,8 @@ def pick_interactively(rows):
     ):
         path = add_to_exclude_file(dropped)
         print(
-            style(
-                t(
-                    f"Saved to {path}; delete a line there to sync it again.",
-                    f"已记到 {path}；删掉对应行即可恢复同步。",
-                ),
-                "dim",
+            muted(
+                t(f"Saved to {path}; delete a line there to sync it again.", f"已记到 {path}；删掉对应行即可恢复同步。")
             )
         )
     print()
@@ -1796,6 +2251,7 @@ CONFIG_KEYS = {
     "color": ("auto", "always", "never"),
     "icons": ("symbols", "emoji", "ascii"),
     "layout": ("auto", "boxed", "plain"),
+    "ui": ("keys", "simple"),
     "purge_archived": bool,
     "include_recent": bool,
     "per_account_archive": bool,
@@ -1882,31 +2338,22 @@ def apply_lang_flag(argv, cfg=None):
 
 
 def choose_action(report, can_undo):
-    """终端里预览之后的菜单，返回 "write" / "pick" / "undo" / "quit"。回车 = 写入。"""
-    options = [("1", "write", t("Write the plan above", "按上面的计划写入"))]
+    """终端里预览之后的菜单，返回 "write" / "pick" / "undo" / "quit"。默认（回车）= 写入。"""
+    options = [{"key": "1", "value": "write", "alias": "yes", "label": t("Write the plan above", "按上面的计划写入")}]
     if report.n_files():
-        options.append(("2", "pick", t("Pick accounts/sessions first, then write", "先挑选账号/会话，再写入")))
+        options.append(
+            {
+                "key": "2",
+                "value": "pick",
+                "label": t("Pick accounts/sessions first, then write", "先挑选账号/会话，再写入"),
+            }
+        )
     if can_undo:
-        options.append(("3", "undo", t("Undo the most recent write", "撤销最近一次写入")))
-    options.append(("q", "quit", t("Quit without writing", "不写入，退出")))
-    print()
-    print(style(t("What next?", "接下来做什么？"), "bold"))
-    for key, _, label in options:
-        if key == "1":
-            print(f"  {style(todo(f'[{key}]'), 'bold')} {style(label, 'bold')}" + muted(t("  (Enter)", "  （回车）")))
-        else:
-            print(f"  {style(f'[{key}]', 'bold')} {label}")
-    aliases = {"": "1", "y": "1", "yes": "1", "n": "q", "no": "q"}
-    while True:
-        answer = ask(t("Choose: ", "请选择："))
-        if answer is None:
-            return "quit"
-        answer = answer.strip().lower()
-        answer = aliases.get(answer, answer)
-        for key, action, _ in options:
-            if answer == key:
-                return action
-        warn(t("Please choose one of the options above.", "请输入上面列出的选项。"))
+        options.append({"key": "3", "value": "undo", "label": t("Undo the most recent write", "撤销最近一次写入")})
+    options.append({"key": "q", "value": "quit", "alias": "no", "label": t("Quit without writing", "不写入，退出")})
+    if keys_available():
+        print()
+    return select_one(t("What next?", "接下来做什么？"), options, default=0) or "quit"
 
 
 def ask_include_recent(sessions):
@@ -1926,7 +2373,7 @@ def ask_include_recent(sessions):
         "(set include_recent in config.toml to stop asking)",
         "（在 config.toml 里设置 include_recent 可不再询问）",
     )
-    ok = confirm(t("Sync them too?", "一并同步？") + " " + style(hint, "dim"))
+    ok = confirm_key(t("Sync them too?", "一并同步？") + " " + style(hint, "dim"))
     print()
     return ok
 
@@ -2558,7 +3005,7 @@ def decide(args, report, interactive):
         do_purge = do_purge and apply
     elif not apply:
         print()
-        apply = confirm(t("Write now?", "现在写入？"))
+        apply = confirm_key(t("Write now?", "现在写入？"))
     if apply and do_purge:
         do_purge = confirm_purge(args, report)
         if not do_purge and not report.n_files():
@@ -2567,6 +3014,15 @@ def decide(args, report, interactive):
 
 
 def main(argv=None):
+    try:
+        run(argv)
+    except KeyboardInterrupt:  # Ctrl-C：终端已由 RawKeys 恢复，不打印 Python 的回溯信息
+        print()
+        print(t(*CANCELLED), file=sys.stderr)
+        sys.exit(130)
+
+
+def run(argv=None):
     use_safe_stdio()
     cfg = load_config()
     apply_lang_flag(argv, cfg)
@@ -2577,8 +3033,10 @@ def main(argv=None):
         print(zsh_completion(ap), end="")
         return
     setup_terminal("never" if args.json else args.color, args.icons, "plain" if args.json else args.layout)
+    global _UI
+    _UI = cfg.get("ui", "keys")
     if args.save_defaults:
-        saved = {k: getattr(args, k) for k in CONFIG_KEYS if getattr(args, k) is not None}
+        saved = {k: getattr(args, k, None) for k in CONFIG_KEYS if getattr(args, k, None) is not None}
         p = save_config(saved)
         if not args.json:
             items = ", ".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in saved.items())
