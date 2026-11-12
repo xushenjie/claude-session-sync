@@ -114,7 +114,11 @@ SYMBOLS = {
     "minus": ("−", "-"),
     "cur": ("●", "*"),  # 当前 CLI 登录的账号
     "acct": ("●", "o"),  # 其他账号
+    "gone": ("○", "-"),  # 目录已经不在的已知账号
     "sess": ("◇", "-"),  # 会话
+    "dash": ("–", "-"),
+    "branch": ("├", "|"),  # 账号树：组织挂在账号下面
+    "last": ("└", "`"),
     "sel": ("❯", ">"),
 }
 # --icons emoji 时替换的符号；只选终端里固定占两格的 emoji，⚠️ 靠 U+FE0F 变成两格
@@ -132,6 +136,7 @@ EMOJI = {
     "group": "📁",
     "cur": "🟢",
     "acct": "⚪",
+    "gone": "💤",
     "sess": "💬",
 }
 ANSI_RE = re.compile(r"\033\[[0-9;]*m")
@@ -245,18 +250,23 @@ def tip(text):
 
 
 def fit(text, width):
-    """截断到 width 个显示宽度以内，超出时以省略号结尾。"""
+    """截断到 width 个显示宽度以内，超出时以省略号结尾。文字里可以带颜色控制码，截断时会先复位颜色。"""
     if disp_width(text) <= width:
         return text
     ell = sym("ell")
     limit = max(0, width - disp_width(ell))
-    out, used = [], 0
-    for ch in text:
-        w = char_width(ch)
-        if used + w > limit:
-            break
-        out.append(ch)
-        used += w
+    out, used, styled = [], 0, False
+    for tok in re.split(f"({ANSI_RE.pattern})", text):
+        if ANSI_RE.fullmatch(tok):
+            out.append(tok)
+            styled = True
+            continue
+        for ch in tok:
+            w = char_width(ch)
+            if used + w > limit:
+                return "".join(out) + ("\033[0m" if styled else "") + ell
+            out.append(ch)
+            used += w
     return "".join(out) + ell
 
 
@@ -359,16 +369,18 @@ def panel(title, lines, right="", title_styles=("bold",), width=None):
     return out
 
 
-def table(title, columns, rows, width=None, right=""):
-    """带标题的网格表格。columns：[{"h": 表头, "align": "l"/"r", "flex": 占剩余宽度, "drop": 窄屏时可省略}]；
-    rows：每行一个 cell 列表。"""
+def table(title, columns, rows, width=None, right="", seps=None):
+    """带标题的网格表格。columns：[{"h": 表头, "align": "l"/"r", "flex": 占剩余宽度, "drop": 窄屏时可省略,
+    "max": 最大宽度}]；rows：每行一个 cell 列表。cell 文字里的换行分成多行显示，第二行起用暗色。
+    seps：在这些行号前面画横线；不给时，有多行单元格就每行之间都画。"""
     b = box_chars()
     width = width or panel_width()
     cols = list(columns)
     keep = list(range(len(cols)))
 
     def natural(i):
-        return max(disp_width(cols[i]["h"]), *(disp_width(r[i][0]) for r in rows)) if rows else disp_width(cols[i]["h"])
+        w = max([disp_width(cols[i]["h"])] + [disp_width(x) for r in rows for x in r[i][0].split("\n")])
+        return min(w, cols[i]["max"]) if cols[i].get("max") else w
 
     flex = next((i for i, c in enumerate(cols) if c.get("flex")), len(cols) - 1)
     flex_min = 16  # 灵活列先缩到这个宽度（截断加省略号），还放不下才去掉可省略的列
@@ -385,9 +397,17 @@ def table(title, columns, rows, width=None, right=""):
     def hline(left, mid, right_):
         return muted(left + mid.join(b["h"] * (widths[i] + 2) for i in keep) + right_)
 
-    def row_line(cells):
-        parts = [" " + render_cell(cells[i], widths[i], cols[i].get("align", "l")) + " " for i in keep]
-        return muted(b["v"]) + muted(b["v"]).join(parts) + muted(b["v"])
+    def row_lines(cells):
+        segs = {i: cells[i][0].split("\n") for i in keep}
+        out = []
+        for k in range(max(len(v) for v in segs.values())):
+            parts = []
+            for i in keep:
+                c = cells[i]
+                sub = ("",) if k >= len(segs[i]) else (segs[i][k], *c[1:]) if k == 0 else (segs[i][k], "dim")
+                parts.append(" " + render_cell(sub, widths[i], cols[i].get("align", "l")) + " ")
+            out.append(muted(b["v"]) + muted(b["v"]).join(parts) + muted(b["v"]))
+        return out
 
     inner = sum(widths[i] + 3 for i in keep) - 1
     head = f"{b['h']} {title} "
@@ -398,8 +418,12 @@ def table(title, columns, rows, width=None, right=""):
         + muted(b["h"] * max(0, inner - disp_width(head) - disp_width(tail)))
     )
     top += (muted(f" {right} " + b["h"]) if right else "") + muted(b["tr"])
-    out = [top, row_line([cell(c["h"], "dim") for c in cols]), hline(b["l"], b["x"], b["r"])]
-    out += [row_line(r) for r in rows]
+    out = [top, *row_lines([cell(c["h"], "dim") for c in cols]), hline(b["l"], b["x"], b["r"])]
+    body = [row_lines(r) for r in rows]
+    if seps is None:  # 有多行的单元格时，每行之间画横线，否则分不清第二行属于哪一行
+        seps = range(1, len(body)) if any(len(x) > 1 for x in body) else ()
+    for i, lines in enumerate(body):
+        out += ([hline(b["l"], b["x"], b["r"])] if i and i in seps else []) + lines
     out.append(hline(b["bl"], b["b"], b["br"]))
     return out
 
@@ -1528,8 +1552,11 @@ def execute_purge(plan, trash):
 # 名称来源（按优先级）：
 #   1. 用户用 --set-alias 起的别名
 #   2. CLI 当前登录的账号（~/.claude.json 的 oauthAccount）
-#   3. 以前 --apply 时记下的 CLI 账号信息（~/.claude-desktop-sync/accounts.json）
+#   3. 以前运行时记下的 CLI 账号信息（~/.claude-desktop-sync/accounts.json）
 # 邮箱一律打码后再显示，因为预览输出经常会被贴进 issue。
+#
+# accounts.json 同时是"已知账号簿"：每次运行都记下扫描到的账号/组织目录。桌面端退出登录或
+# 数据被清理后目录会消失，账号簿让这些账号继续出现在列表里，而不是悄悄少掉。
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
@@ -1548,23 +1575,90 @@ def accounts_file():
     return JOURNAL_DIR / "accounts.json"
 
 
+BOOK_VERSION = 2
+UUID_PAIR_RE = re.compile(r"claude-code-sessions[/\\]([0-9a-fA-F-]{36})[/\\]([0-9a-fA-F-]{36})")
+
+
+def now_iso():
+    return dt.datetime.now().isoformat(timespec="seconds")
+
+
 def load_account_book():
+    """读取账号簿；旧版（v1 只记 CLI 账号）读出来就升级，第一次升级时从写入日志里补回历史账号。"""
     try:
         data = json.loads(accounts_file().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    return {
-        "accounts": data.get("accounts") if isinstance(data.get("accounts"), dict) else {},
+    accounts = data.get("accounts") if isinstance(data.get("accounts"), dict) else {}
+    book = {
+        "accounts": {k: dict(v) for k, v in accounts.items() if isinstance(v, dict)},
         "aliases": data.get("aliases") if isinstance(data.get("aliases"), dict) else {},
     }
+    if data.get("version", 1) < BOOK_VERSION:
+        for info in book["accounts"].values():
+            if "seen_at" in info:  # v1：seen_at 是记下 CLI 账号信息的时间
+                info.setdefault("info_at", info.pop("seen_at"))
+        backfill_from_journals(book)
+    return book
+
+
+def journal_stamp(path):
+    """journal-20261111-140200[-123456].json 的时间（ISO 格式）；解析不了返回 None。"""
+    stamp = path.stem.split("-", 1)[-1]
+    for fmt in ("%Y%m%d-%H%M%S-%f", "%Y%m%d-%H%M%S"):
+        try:
+            return dt.datetime.strptime(stamp, fmt).isoformat(timespec="seconds")
+        except ValueError:
+            continue
+    return None
+
+
+def backfill_from_journals(book):
+    """从以前的写入日志里找出写过的账号/组织目录，记进账号簿。返回补回的数量。"""
+
+    def paths(x):
+        if isinstance(x, str):
+            yield x
+        elif isinstance(x, (list, dict)):
+            for v in x.values() if isinstance(x, dict) else x:
+                yield from paths(v)
+
+    added = 0
+    for j in sorted(JOURNAL_DIR.glob("journal-*.json")) if JOURNAL_DIR.exists() else []:
+        try:
+            data = json.loads(j.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        when = journal_stamp(j)
+        for path in paths(data):
+            m = UUID_PAIR_RE.search(path)
+            if not m:
+                continue
+            key = f"{m.group(1)}/{m.group(2)}"
+            added += "last_seen" not in book["accounts"].get(key, {})
+            note_seen(book, key, path[: m.start() + len("claude-code-sessions")], when)
+    return added
+
+
+def note_seen(book, key, root, when):
+    """记下某个账号/组织目录在 when 时出现在 root 下。只会把时间往两头扩，不会改小。"""
+    info = book["accounts"].setdefault(key, {})
+    roots = info.setdefault("roots", [])
+    if root and root not in roots:
+        roots.append(root)
+    if when:
+        if not info.get("first_seen") or when < info["first_seen"]:
+            info["first_seen"] = when
+        if not info.get("last_seen") or when > info["last_seen"]:
+            info["last_seen"] = when
 
 
 def save_account_book(book):
     JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
     p = accounts_file()
-    p.write_text(json.dumps({"version": 1, **book}, ensure_ascii=False, indent=2), encoding="utf-8")
+    p.write_text(json.dumps({"version": BOOK_VERSION, **book}, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         os.chmod(p, 0o600)  # 里面有邮箱，只让自己读
     except OSError:
@@ -1591,16 +1685,54 @@ def cli_login_account():
 
 
 def remember_cli_account(book, cli_acct):
-    """把 CLI 当前账号记进账号簿；有变化返回 True。"""
+    """把 CLI 当前账号的邮箱和组织名记进账号簿；有变化返回 True。"""
     if not cli_acct:
         return False
     key = f"{cli_acct['account']}/{cli_acct['org']}"
     info = {"email": cli_acct["email"], "org_name": cli_acct["org_name"]}
-    old = book["accounts"].get(key) or {}
+    old = book["accounts"].setdefault(key, {})
     if {k: old.get(k) for k in info} == info:
         return False
-    book["accounts"][key] = {**info, "seen_at": dt.datetime.now().isoformat(timespec="seconds")}
+    old.update(info, info_at=now_iso())
     return True
+
+
+def remember_accounts(book, all_accts, cli_acct):
+    """每次运行都调用：记下扫描到的账号/组织目录和 CLI 当前账号。账号簿不属于桌面端数据，预览时也写。"""
+    when = now_iso()
+    for root, acct, org, _d in all_accts:
+        note_seen(book, f"{acct}/{org}", str(root), when)
+    remember_cli_account(book, cli_acct)
+    try:
+        save_account_book(book)
+    except OSError:
+        pass  # 只是记录，写不了不影响同步
+
+
+def missing_accounts(book, all_accts, roots=None):
+    """账号簿里有、磁盘上已经没有目录的账号/组织，按最后一次见到的时间倒序。
+    roots 不为空时（--desktop-root）只看这些目录下的账号。只在 CLI 里登录过、从没在桌面端见过的不算。"""
+    present = {f"{a}/{o}" for _, a, o, _ in all_accts}
+    wanted = {str(r) for r in roots} if roots else None
+    out = []
+    for key, info in book["accounts"].items():
+        if key in present or not info.get("last_seen") or "/" not in key:
+            continue
+        if wanted is not None and not wanted & set(info.get("roots") or []):
+            continue
+        acct, org = key.split("/", 1)
+        out.append((acct, org, info))
+    return sorted(out, key=lambda x: x[2]["last_seen"], reverse=True)
+
+
+def forget_accounts(book, keys):
+    """从账号簿删除这些账号/组织，连同只属于它们的别名。"""
+    for key in keys:
+        book["accounts"].pop(key, None)
+        book["aliases"].pop(key, None)
+        acct = key.split("/", 1)[0]
+        if acct in book["aliases"] and not any(k.startswith(acct + "/") for k in book["accounts"]):
+            book["aliases"].pop(acct)
 
 
 def is_cli_account(acct, org, cli_acct):
@@ -1643,6 +1775,61 @@ def account_short(acct, org, book, cli_acct):
     return label.split(" · ")[0] if label else f"{acct[:8]}{sym('ell')}"
 
 
+PERSONAL_ORG_RE = re.compile(r"^(.+)'s Organi[sz]ation$")
+
+
+def account_email(acct, book, cli_acct):
+    """账号的邮箱（只有在 CLI 里登录过才知道），不打码；不知道时为空。"""
+    if cli_acct and cli_acct["account"] == acct and cli_acct["email"]:
+        return cli_acct["email"]
+    for key, info in book["accounts"].items():
+        if key.split("/", 1)[0] == acct and info.get("email"):
+            return info["email"]
+    return ""
+
+
+def account_alias(acct, book):
+    """账号级别名（--set-alias 账号ID=名称）；组织级别名只显示在组织那一行。"""
+    return book["aliases"].get(acct) or ""
+
+
+def account_title(acct, book, cli_acct, orgs=()):
+    """账号树里账号这一行的名称：别名 · 打码邮箱；都不知道时为空。"""
+    email = account_email(acct, book, cli_acct)
+    email = mask_email(email) if EMAIL_RE.fullmatch(email) else ""
+    return " · ".join(x for x in (account_alias(acct, book), email) if x)
+
+
+def org_title(acct, org, book, cli_acct, orgs=()):
+    """账号树里组织这一行的名称：组织别名（和账号别名相同时不算）> 组织名；都不知道时为空。
+    个人组织（"邮箱's Organization"）显示成"个人组织"，属于别的账号时写明是谁的。"""
+    alias = book["aliases"].get(f"{acct}/{org}")
+    if alias:
+        return alias
+    name = cli_acct["org_name"] if cli_acct and cli_acct["org"] == org else ""
+    name = name or (book["accounts"].get(f"{acct}/{org}") or {}).get("org_name") or ""
+    for key, info in book["accounts"].items():  # 组织名只跟组织有关，从别的账号那里知道的也能用
+        if name:
+            break
+        if key.endswith("/" + org):
+            name = info.get("org_name") or ""
+    m = PERSONAL_ORG_RE.match(name)
+    if not (m and EMAIL_RE.fullmatch(m.group(1))):
+        return mask_emails_in(name)
+    owner = m.group(1)
+    if owner.lower() == account_email(acct, book, cli_acct).lower():
+        return t("personal org", "个人组织")
+    others = {k.split("/", 1)[0] for k in book["accounts"]} | ({cli_acct["account"]} if cli_acct else set())
+    owner_acct = next((a for a in sorted(others) if account_email(a, book, cli_acct).lower() == owner.lower()), "")
+    who = (account_alias(owner_acct, book) if owner_acct else "") or mask_email(owner)
+    return t(f"{who}'s personal org", f"{who} 的个人组织")
+
+
+def root_label(root):
+    """客户端名称：claude-code-sessions 的上一级目录名（Claude、Claude-3p）。"""
+    return Path(root).parent.name if root else t("unknown client", "未知客户端")
+
+
 def resolve_account_key(key, all_accts):
     """把 <账号ID前缀>[/<组织ID前缀>] 解析成完整 ID。返回 (账号ID, 组织ID或None)；出错时退出。"""
     acct_part, _, org_part = key.partition("/")
@@ -1682,7 +1869,7 @@ def set_aliases(specs, all_accts):
             book["aliases"][full] = name
             print(t(f"Alias set: {full} = {name}", f"已设置别名：{full} = {name}"))
         else:
-            book["aliases"].pop(full, None)
+            remove_alias(book, acct, org)
             print(t(f"Alias removed: {full}", f"已删除别名：{full}"))
     save_account_book(book)
 
@@ -1727,6 +1914,14 @@ def format_time(ms):
     return time.strftime(TIME_FMT, time.localtime(ms / 1000))
 
 
+def format_iso(text):
+    """账号簿里的 ISO 时间 → 2026-11-12 11:22；解析不了原样返回。"""
+    try:
+        return dt.datetime.fromisoformat(text).strftime(TIME_FMT)
+    except (TypeError, ValueError):
+        return str(text)
+
+
 def pick_interactively(rows):
     """-i：先选账号（多于一个时），再选会话。直接修改 rows 里的 todo。"""
     writable = [r for r in rows if r["template"] and r["todo"]]
@@ -1735,8 +1930,8 @@ def pick_interactively(rows):
     if len(writable) > 1:
         options = [
             {
-                "label": (r["name"].split(" · ")[0] if r.get("name") else r["ids"])
-                + (f"  {r['ids']}" if r.get("name") else ""),
+                "label": f"{r.get('acct_name') or r['acct'][:8]} {sym('tip')} {r.get('org_name') or r['org'][:8]}"
+                f"  {r['ids']}",
                 "note": t(f"to add {len(r['todo'])}", f"待补 {len(r['todo'])}"),
             }
             for r in writable
@@ -1784,8 +1979,22 @@ def pick_interactively(rows):
 class SyncReport:
     """一次运行的同步计划：负责普通/安静/详细三种文本输出和 JSON 输出。"""
 
-    def __init__(self, rows, sessions, skipped, recent, held_back, purge, archived_global, deleted_global):
+    def __init__(
+        self,
+        rows,
+        sessions,
+        skipped,
+        recent,
+        held_back,
+        purge,
+        archived_global,
+        deleted_global,
+        missing=(),
+        filtered=(),
+    ):
         self.rows = rows
+        self.missing = list(missing)  # 目录已经不在的已知账号，只用来显示
+        self.filtered = list(filtered)  # 被 --account 筛掉的账号，只用来显示
         self.sessions = sessions
         self.skipped = skipped
         self.recent = recent
@@ -1844,11 +2053,44 @@ class SyncReport:
 
     # ---- 内容：两种布局（框线 / 纯文本）共用
 
+    def all_orgs(self):
+        """账号表里的每一行（一个组织目录）：要处理的、被筛掉的、目录已经不在的。"""
+        return self.rows + self.filtered + self.missing
+
     def stats(self):
+        orgs = self.all_orgs()
         return [
             (t("CLI sessions", "CLI 会话"), len(self.sessions)),
-            (t("accounts", "账号"), len(self.rows)),
+            (t("accounts", "账号"), len({r["acct"] for r in orgs})),
+            (t("orgs", "组织"), len(orgs)),
             (t("archived/deleted", "已归档/删除"), len(self.archived_global)),
+        ]
+
+    def gone_text(self):
+        n = len(self.missing)
+        return t(f"{n} directory(ies) gone", f"{n} 个目录不存在") if n else ""
+
+    def missing_notes(self):
+        if not self.missing:
+            return []
+        n = len(self.missing)
+        cli_gone = (
+            [
+                t(
+                    "the account the CLI is signed in to has no directory in the desktop app, so its sidebar won't "
+                    "show any session until you sign in to it there",
+                    "当前 CLI 登录的账号在桌面端没有目录，在桌面端登录它之前，侧边栏不会显示它的会话",
+                )
+            ]
+            if any(r.get("is_cli") for r in self.missing)
+            else []
+        )
+        return cli_gone + [
+            t(
+                f"{n} known organization director{'y no longer exists' if n == 1 else 'ies no longer exist'} "
+                "(signed out of the desktop app, or its data was cleared); sign in again there and run again to sync",
+                f"{n} 个已知的组织目录不存在（桌面端已退出登录或数据被清理）；在桌面端重新登录后再运行即可补上",
+            )
         ]
 
     def verbose_stats(self):
@@ -1872,35 +2114,84 @@ class SyncReport:
             notes.append(t(f"+{r['unusable']} command-only/empty", f"+{r['unusable']} 仅命令/空会话"))
         return " · ".join(notes)
 
-    def account_cells(self, r):
-        """一个账号的各列：图标、名称、ID、已有、待补、说明，都是 cell。"""
+    def action(self, r, verbose=False):
+        """这个组织目录本次怎么处理：(机读值, 带颜色的说明)。机读值：add / in_sync / no_template / gone / filtered。"""
+        if r.get("missing"):
+            text = muted(t("skip: directory gone", "跳过：目录不存在"))
+            if verbose and r.get("last_seen"):
+                seen = format_iso(r["last_seen"])
+                text += muted(t(f" · last seen {seen}", f" · 最后见到 {seen}"))
+            return "gone", text
+        if r.get("filtered"):
+            return "filtered", muted(t("not processed (filtered out)", "不处理（已筛掉）"))
         n = len(r["todo"])
-        if n and not r["template"]:
-            icon = cell(sym("warn"), "yellow")
-        elif r.get("is_cli"):
-            icon = cell(sym("cur"), "green")
-        else:
-            icon = cell(sym("acct"), "dim")
-        if n and not r["template"]:
-            count = cell(f"+{n}", "yellow")
+        notes = self.account_notes(r)
+        if n and r["source"] == "none":
+            kind, text = "no_template", caution(t("skip: no template", "跳过：无模板"))
         elif n:
-            count = cell(f"+{n}", "cyan", "bold")
+            kind, text = "add", style(t(f"add {n} session(s)", f"补 {n} 个会话"), "cyan", "bold")
+            if r["source"] == "borrowed":
+                notes = t("borrows a template", "借用模板") + (" · " + notes if notes else "")
         else:
-            count = cell("0", "dim")
-        note = self.account_notes(r)
-        if n and r["source"] == "borrowed":
-            note = t("borrows a template", "借用其他账号的模板") + (" · " + note if note else "")
-        note = (
-            cell(t("no template, skipped", "无模板，跳过"), "yellow")
-            if n and r["source"] == "none"
-            else cell(note, "dim")
-        )
-        name = cell(r["name"], "bold") if r.get("name") else cell(r["ids"], "dim")
-        ids = cell(r["ids"], "dim") if r.get("name") else cell("")
-        return icon, name, ids, cell(r["known"]), count, note
+            kind, text = "in_sync", muted(t("in sync", "已同步"))
+        return kind, text + (muted(" · " + notes) if notes else "")
 
-    def cli_tag(self):
-        return t("current CLI login", "当前 CLI 登录")
+    def account_tree(self):
+        """按 客户端 → 账号 → 组织 分组：[(客户端目录, [(账号ID, [组织行])])]。
+        CLI 登录的账号排最前，目录全都不在的账号排最后；同一账号里目录还在的组织排前面。"""
+        groups = {}
+        for r in self.all_orgs():
+            groups.setdefault(r.get("root") or "", {}).setdefault(r["acct"], []).append(r)
+        out = []
+        for root, accts in groups.items():
+            items = sorted(
+                accts.items(),
+                key=lambda x: (not any(r.get("acct_cli") for r in x[1]), all(r.get("missing") for r in x[1])),
+            )
+            out.append((root, [(a, sorted(rs, key=lambda r: bool(r.get("missing")))) for a, rs in items]))
+        return out
+
+    def account_lines(self, verbose=False):
+        """账号树的每一行：(名称, ID, 已有, 本次处理)，都是带颜色的文字。返回 (行, 每个客户端第一行的行号)。"""
+        lines, starts = [], []
+        tree = self.account_tree()
+        for root, accts in tree:
+            starts.append(len(lines))
+            if len(tree) > 1:
+                lines.append((style(root_label(root), "bold"), "", "", ""))
+            for acct, rows in accts:
+                is_cli = any(r.get("acct_cli") for r in rows)
+                all_gone = all(r.get("missing") for r in rows)
+                icon = ok(sym("cur")) if is_cli else muted(sym("gone" if all_gone else "acct"))
+                title = rows[0].get("acct_name") or ""
+                name = style(title, "bold", "green" if is_cli else "bold") if title else muted(acct[:8])
+                if is_cli:
+                    name += "  " + ok(t("current CLI", "当前 CLI"))
+                lines.append((f"{icon} {name}", muted(acct[:8]) if title else "", "", ""))
+                for k, r in enumerate(rows):
+                    kind, action = self.action(r, verbose)
+                    if kind == "gone":
+                        icon = muted(sym("gone"))
+                    elif kind == "no_template":
+                        icon = caution(sym("warn"))
+                    else:
+                        icon = muted(sym("acct"))
+                    org_name = r.get("org_name") or ""
+                    if org_name:
+                        org_name = muted(org_name) if kind in ("gone", "filtered") else org_name
+                    else:
+                        org_name = muted(r["org"][:8])
+                    branch = muted(f"  {sym('last' if k == len(rows) - 1 else 'branch')} ")
+                    existing = muted(sym("dash")) if kind in ("gone", "filtered") else str(r["known"])
+                    lines.append(
+                        (
+                            f"{branch}{icon} {org_name}",
+                            muted(r["org"][:8]) if r.get("org_name") else "",
+                            existing,
+                            action,
+                        )
+                    )
+        return lines, starts
 
     def warnings(self, pending):
         out = []
@@ -1983,8 +2274,8 @@ class SyncReport:
                 (
                     "add",
                     t(
-                        f"add {len(pending)} session(s) ({self.n_files()} index file(s) in {k} account(s))",
-                        f"补 {len(pending)} 个会话（{k} 个账号共 {self.n_files()} 个索引文件）",
+                        f"add {len(pending)} session(s) ({self.n_files()} index file(s) in {k} organization(s))",
+                        f"补 {len(pending)} 个会话（{k} 个组织共 {self.n_files()} 个索引文件）",
                     ),
                 )
             )
@@ -2014,33 +2305,17 @@ class SyncReport:
         if verbose:
             print(muted("  " + self.verbose_stats()))
 
-    def print_accounts(self):
+    def print_accounts(self, verbose=False):
         print()
-        cells = [list(self.account_cells(r)) for r in self.rows]
-        for r, c in zip(self.rows, cells):
-            if r.get("is_cli") and r.get("name"):
-                c[1] = cell(f"{c[1][0]}  {self.cli_tag()}", *c[1][1:])  # 没有颜色时也能认出当前账号
-        w = [max(disp_width(c[i][0]) for c in cells) for i in range(6)]
-        w[3] = max(w[3], disp_width(t("existing", "已有")))
-        w[4] = max(w[4], disp_width(t("to add", "待补")))
-        head = pad(t("Accounts", "账号"), 2 + w[0] + 1 + w[1] + 2 + w[2])
-        cols = f"{rpad(t('existing', '已有'), w[3])}  {pad(t('to add', '待补'), w[4])}  {t('notes', '说明')}"
-        print(style(head, "bold") + "  " + muted(cols))
-        for r, c in zip(self.rows, cells):
-            name = render_cell(c[1], w[1])
-            if r.get("is_cli") and r.get("name"):  # 名称加粗，标记用绿色
-                tag = self.cli_tag()
-                name = (
-                    style(r["name"], "bold")
-                    + "  "
-                    + ok(tag)
-                    + " " * (w[1] - disp_width(r["name"]) - 2 - disp_width(tag))
-                )
-            line = (
-                f"  {render_cell(c[0], w[0])} {name}  {render_cell(c[2], w[2])}  "
-                f"{render_cell(c[3], w[3], 'r')}  {render_cell(c[4], w[4])}  {render_cell(c[5], disp_width(c[5][0]))}"
-            )
-            print(line.rstrip())
+        lines, _ = self.account_lines(verbose)
+        heads = (t("Account / organization", "账号 / 组织"), "ID", t("existing", "已有"), t("this run", "本次处理"))
+        w = [max([disp_width(heads[i])] + [disp_width(x[i]) for x in lines]) for i in range(3)]
+        gone = self.gone_text()
+        title = style(t("Accounts", "账号"), "bold") + (muted(f"  {sym('sep')} {gone}") if gone else "")
+        print(title)
+        print(muted(f"  {pad(heads[0], w[0])}  {pad(heads[1], w[1])}  {rpad(heads[2], w[2])}  {heads[3]}"))
+        for name, ids, existing, action in lines:
+            print(f"  {pad(name, w[0])}  {pad(ids, w[1])}  {rpad(existing, w[2])}  {action}".rstrip())
 
     def print_pending(self, pending, verbose, limit):
         print()
@@ -2081,7 +2356,7 @@ class SyncReport:
         limit = None if verbose else LIST_LIMIT
         if not quiet:
             self.print_header(verbose)
-            self.print_accounts()
+            self.print_accounts(verbose)
             if pending:
                 self.print_pending(pending, verbose, limit)
         warnings = self.warnings(pending)
@@ -2089,6 +2364,9 @@ class SyncReport:
             print()
         for w in warnings:
             warn(w)
+        if not quiet:
+            for x in self.missing_notes():
+                tip(x)
         if self.purge is not None:
             self.print_purge(quiet, limit)
         print()
@@ -2103,24 +2381,17 @@ class SyncReport:
 
     # ---- 框线布局：终端里默认使用
 
-    def boxed_accounts(self):
+    def boxed_accounts(self, verbose=False):
         cols = [
-            {"h": ""},
-            {"h": t("Name", "名称")},
+            # 名称太长时截断，免得挤掉后面几列；窄终端里给"本次处理"多留点地方
+            {"h": t("Account / organization", "账号 / 组织"), "max": min(46, max(20, panel_width() - 45))},
             {"h": "ID", "drop": True},
             {"h": t("existing", "已有"), "align": "r"},
-            {"h": t("to add", "待补"), "align": "r"},
-            {"h": t("notes", "说明"), "flex": True},
+            {"h": t("this run", "本次处理"), "flex": True},
         ]
-        rows = []
-        for r in self.rows:
-            c = list(self.account_cells(r))
-            if r.get("name"):  # 表格里只放主名称（别名或邮箱），完整信息太宽，会挤掉 ID 列
-                c[1] = cell(r["name"].split(" · ")[0], *c[1][1:])
-            if r.get("is_cli"):
-                c[1] = cell(f"{c[1][0]}  {t('CLI', '当前 CLI')}", "bold", "green")
-            rows.append(c)
-        return table(t("Accounts", "账号"), cols, rows)
+        lines, starts = self.account_lines(verbose)
+        rows = [[cell(x) for x in line] for line in lines]
+        return table(t("Accounts", "账号"), cols, rows, right=self.gone_text(), seps=set(starts[1:]))
 
     def boxed_pending(self, pending, verbose, limit):
         inner = panel_width() - 4
@@ -2190,6 +2461,9 @@ class SyncReport:
             lines += wrapped(sym("add") if kind == "add" else sym("minus"), text, "cyan" if kind == "add" else "red")
         for w in self.warnings(pending):
             lines += wrapped(sym("warn"), w, "yellow")
+        if not quiet:
+            for x in self.missing_notes():
+                lines += wrapped(sym("tip"), x, "dim")
         if not self.has_work() and not quiet:
             for x in self.tips():
                 lines += wrapped(sym("tip"), x, "dim")
@@ -2201,10 +2475,15 @@ class SyncReport:
         blocks = []  # 每个面板一块，块之间空一行
         if not quiet:
             ver = f"claude-session-sync {__version__}"
-            line = muted("  ·  ").join(f"{muted(k)} {style(str(v), 'bold')}" for k, v in self.stats())
-            lines = [line] + ([muted(self.verbose_stats())] if verbose else [])
+            lines, inner = [""], panel_width() - 4
+            for k, v in self.stats():  # 统计项放不下一行时折到下一行
+                item = f"{muted(k)} {style(str(v), 'bold')}"
+                if lines[-1] and disp_width(lines[-1]) + 5 + disp_width(item) > inner:
+                    lines.append("")
+                lines[-1] += (muted("  ·  ") if lines[-1] else "") + item
+            lines += [muted(x) for x in wrap_display(self.verbose_stats(), inner)] if verbose else []
             blocks.append(panel(ver, lines))
-            blocks.append(self.boxed_accounts())
+            blocks.append(self.boxed_accounts(verbose))
             if pending:
                 blocks.append(self.boxed_pending(pending, verbose, limit))
         if self.purge is not None and (self.purge[0] or not quiet):
@@ -2247,8 +2526,19 @@ class SyncReport:
                     "existing": r["known"],
                     "to_add": [s["id"] for s in r["todo"]] if r["template"] else [],
                     "template": r["source"],
+                    "action": self.action(r)[0],
                 }
                 for r in self.rows
+            ],
+            "missing_accounts": [
+                {
+                    "account": r["acct"],
+                    "org": r["org"],
+                    "label": r["label"],
+                    "last_seen": r["last_seen"],
+                    "action": "gone",
+                }
+                for r in self.missing
             ],
             "sessions": [
                 {
@@ -2393,12 +2683,25 @@ ICON_CHOICES = [("symbols", "symbols  ● ✓ ⚠"), ("emoji", "emoji  🟢 ✅ 
 LAYOUT_CHOICES = [("auto", "auto"), ("boxed", "boxed"), ("plain", "plain")]
 
 
+def known_orgs(ctx, acct):
+    return [o for _, a, o, _ in ctx.known_accts if a == acct]
+
+
+def tree_names(ctx, acct, org):
+    """挑选列表里用的 (账号名, 组织名)；不知道名称时用 ID 前 8 位。"""
+    orgs = known_orgs(ctx, acct)
+    return (
+        account_title(acct, ctx.book, ctx.cli_acct, orgs) or acct[:8],
+        org_title(acct, org, ctx.book, ctx.cli_acct, orgs) or org[:8],
+    )
+
+
 def account_option(acct, org, ctx, note=""):
-    name = account_label(acct, org, ctx.book, ctx.cli_acct, with_cli=False).split(" · ")[0]
-    ids = f"{acct[:8]}/{org[:8]}"
-    label = f"{name}  {ids}" if name else ids
-    if is_cli_account(acct, org, ctx.cli_acct):
-        label += "  " + t("(current CLI login)", "（当前 CLI 登录）")
+    """一个组织目录的选项："账号名 › 组织名  账号ID/组织ID"，看得出组织属于哪个账号。"""
+    name, org_name = tree_names(ctx, acct, org)
+    label = f"{name} {sym('tip')} {org_name}  {acct[:8]}/{org[:8]}"
+    if ctx.cli_acct and ctx.cli_acct["account"] == acct:
+        label += "  " + t("(current CLI)", "（当前 CLI）")
     return {"label": label, "note": note}
 
 
@@ -2482,50 +2785,119 @@ def manage_exclude_file():
     )
 
 
-def current_alias(book, acct, org):
-    return book["aliases"].get(f"{acct}/{org}") or book["aliases"].get(acct) or ""
-
-
-def remove_alias(book, accts, acct, org):
-    """删除某个组织的别名。如果名称是按账号设置的，把它下放到同账号的其他组织，免得它们一起丢名字。"""
-    book["aliases"].pop(f"{acct}/{org}", None)
-    shared = book["aliases"].pop(acct, None)
-    if shared:
-        for _, a, o, _ in accts:
-            if a == acct and o != org:
-                book["aliases"].setdefault(f"{a}/{o}", shared)
+def remove_alias(book, acct, org=None):
+    """删除别名。org 为 None 时删账号别名，连同以前按组织记下、和它同名的旧别名（那时组织别名就是账号名）。"""
+    if org:
+        book["aliases"].pop(f"{acct}/{org}", None)
+        return
+    old = account_alias(acct, book)
+    book["aliases"].pop(acct, None)
+    for key in [k for k, v in book["aliases"].items() if k.startswith(acct + "/") and v == old]:
+        book["aliases"].pop(key)
 
 
 def alias_wizard(ctx):
-    """给账号起名：选账号 → 输入名称（预先填好当前别名）；可以连续设置，Esc 或"完成"结束。"""
+    """给账号起名：账号和它的组织排成树，选账号就给整个账号起名，选组织只给这个组织起名。
+    输入框预先填好当前别名；可以连续设置，Esc 或"完成"结束。"""
     book = ctx.book
     while True:
-        options = []
-        for _, a, o, _ in ctx.all_accts:
-            alias = current_alias(book, a, o)
-            info = account_label(a, o, book, ctx.cli_acct)
-            if alias and info.startswith(alias):
-                info = info[len(alias) :].lstrip(" ·")
-            label = f"{a[:8]}/{o[:8]}" + (f"  {info}" if info else "")
-            options.append({"label": label, "note": alias or t("(no name)", "（未命名）")})
+        options, targets = [], []
+        groups = {}
+        for _, a, o, _ in ctx.known_accts:
+            groups.setdefault(a, []).append(o)
+        for a, orgs in groups.items():
+            alias = account_alias(a, book)
+            name = account_title(a, book, ctx.cli_acct, orgs) or a[:8]
+            options.append({"label": f"{name}  {a[:8]}", "note": alias or t("(no name)", "（未命名）")})
+            targets.append((a, None))
+            for k, o in enumerate(orgs):
+                branch = sym("last" if k == len(orgs) - 1 else "branch")
+                org_name = org_title(a, o, book, ctx.cli_acct, orgs) or o[:8]
+                note = book["aliases"].get(f"{a}/{o}") or t("(no name)", "（未命名）")
+                options.append({"label": f"  {branch} {org_name}  {o[:8]}", "note": note})
+                targets.append((a, o))
         options.append({"label": t("Done", "完成"), "key": "q", "value": "done"})
-        picked = select_one(t("Name which account?", "给哪个账号起名？"), options)
+        picked = select_one(t("Name which account or organization?", "给哪个账号或组织起名？"), options)
         if picked in (None, "done"):
             return
-        _, a, o, _ = ctx.all_accts[picked]
-        ids = f"{a[:8]}/{o[:8]}"
-        name = ask_text(
-            t(f"Name for {ids} (empty removes it): ", f"{ids} 的名称（清空 = 删除）："), current_alias(book, a, o)
-        )
+        a, o = targets[picked]
+        ids = f"{a[:8]}/{o[:8]}" if o else a[:8]
+        current = (book["aliases"].get(f"{a}/{o}") or "") if o else account_alias(a, book)
+        name = ask_text(t(f"Name for {ids} (empty removes it): ", f"{ids} 的名称（清空 = 删除）："), current)
         if name is None:
             continue
         if name:
-            book["aliases"][f"{a}/{o}"] = name
+            if not o:
+                remove_alias(book, a)  # 换掉旧的账号名，包括以前按组织记下的
+            book["aliases"][f"{a}/{o}" if o else a] = name
             print(ok(f"{sym('ok')} ") + t(f"Alias set: {ids} = {name}", f"已设置别名：{ids} = {name}"))
         else:
-            remove_alias(book, ctx.all_accts, a, o)
+            remove_alias(book, a, o)
             print(ok(f"{sym('ok')} ") + t(f"Alias removed: {ids}", f"已删除别名：{ids}"))
         save_account_book(book)
+
+
+def forget_by_keys(specs, ctx):
+    """--forget-account ID：从账号簿删除目录已经不在的账号。目录还在的不能忘记（下次运行又会记下）。"""
+    gone = [(None, a, o, None) for a, o, _ in ctx.missing]
+    keys = []
+    for spec in specs:
+        acct_part, _, org_part = spec.strip().partition("/")
+        if any(a.startswith(acct_part) and o.startswith(org_part) for _, a, o, _ in ctx.all_accts) and not any(
+            a.startswith(acct_part) and o.startswith(org_part) for _, a, o, _ in gone
+        ):
+            sys.exit(
+                t(
+                    f"{spec!r} still has a directory in the desktop app; only accounts whose directory is gone "
+                    "can be forgotten.",
+                    f"{spec!r} 在桌面端的目录还在；只能忘记目录已经不存在的账号。",
+                )
+            )
+        acct, org = resolve_account_key(spec.strip(), gone)
+        keys += [f"{a}/{o}" for _, a, o, _ in gone if a == acct and (org is None or o == org)]
+    forget(ctx, keys)
+
+
+def forget_wizard(ctx):
+    """菜单里的"忘记账号"：勾选目录已经不在的账号，确认后从账号簿删除。"""
+    if not ctx.missing:
+        print(
+            muted(
+                t(
+                    "No accounts to forget; only accounts whose directory is gone can be.",
+                    "没有可忘记的账号（只能忘记目录已经不存在的账号）。",
+                )
+            )
+        )
+        return
+    options = [
+        account_option(
+            a, o, ctx, note=t(f"last seen {format_iso(info['last_seen'])}", f"最后见到 {format_iso(info['last_seen'])}")
+        )
+        for a, o, info in ctx.missing
+    ]
+    picked = select_many(t("Forget which accounts?", "忘记哪些账号？"), options, selected=[])
+    if not picked:
+        return
+    if not confirm_key(
+        t(
+            f"Remove {len(picked)} account(s) and their names from accounts.json? Desktop data is not touched.",
+            f"从 accounts.json 删除这 {len(picked)} 个账号和它们的名称？不会动桌面端的数据。",
+        )
+    ):
+        return
+    forget(ctx, [f"{ctx.missing[i][0]}/{ctx.missing[i][1]}" for i in picked])
+
+
+def forget(ctx, keys):
+    keys = list(dict.fromkeys(keys))
+    if not keys:
+        return
+    forget_accounts(ctx.book, keys)
+    save_account_book(ctx.book)
+    ctx.missing = [m for m in ctx.missing if f"{m[0]}/{m[1]}" not in keys]
+    for key in keys:
+        print(ok(f"{sym('ok')} ") + t(f"Forgot {key}", f"已忘记 {key}"))
 
 
 def settings_wizard(cfg):
@@ -2604,7 +2976,7 @@ def apply_lang_flag(argv, cfg=None):
         _LANG_ZH = cfg["lang"] == "zh"
 
 
-def hub_menu(report, can_undo, filters="", excluded=0):
+def hub_menu(report, can_undo, filters="", excluded=0, gone=0):
     """终端里预览之后的总菜单。返回 write / pick / undo / filter / alias / exclude / settings / quit。
     有待补会话时默认（回车）写入，已全部同步时默认退出。"""
     options = [{"label": t("Sync", "同步"), "sep": True}]
@@ -2631,6 +3003,18 @@ def hub_menu(report, can_undo, filters="", excluded=0):
             "note": filters,
         },
         {"key": "n", "value": "alias", "label": t("Name accounts", "给账号起名")},
+        *(
+            [
+                {
+                    "key": "g",
+                    "value": "forget",
+                    "label": t("Forget accounts that are gone", "忘记已不存在的账号"),
+                    "note": t(f"{gone} gone", f"{gone} 个"),
+                }
+            ]
+            if gone
+            else []
+        ),
         {
             "key": "x",
             "value": "exclude",
@@ -2948,6 +3332,18 @@ Notes:
         ),
     )
     pick.add_argument(
+        "--forget-account",
+        action="append",
+        nargs="?",
+        const=ASK,
+        metavar="ID",
+        help=t(
+            "remove an account whose desktop directory is gone from accounts.json (ID prefix, optionally "
+            "/<org-id-prefix>); repeatable, then exits",
+            "从 accounts.json 删除桌面端目录已经不存在的账号（ID 前缀，可加 /<组织ID前缀>）；可多次使用，删除完即退出",
+        ),
+    )
+    pick.add_argument(
         "--project",
         nargs="?",
         const=ASK,
@@ -3094,12 +3490,19 @@ Notes:
 class Context:
     """一次运行要用的环境：目录、账号、账号名称、排除列表。筛选条件改变后可以重新生成计划，不必重新加载。"""
 
-    def __init__(self, projects, roots, all_accts, book, cli_acct):
+    def __init__(self, projects, roots, all_accts, book, cli_acct, missing=()):
         self.projects = projects
         self.roots = roots
         self.all_accts = all_accts
         self.book = book
         self.cli_acct = cli_acct
+        self.missing = list(missing)  # [(账号ID, 组织ID, 账号簿信息)]：以前见过、现在目录不在了
+
+    @property
+    def known_accts(self):
+        """磁盘上的账号目录加上已经不在的已知账号，形状同 all_accts（不在的 root 和目录为 None）。
+        起名和"忘记账号"用它；同步只看 all_accts。"""
+        return self.all_accts + [(None, a, o, None) for a, o, _ in self.missing]
 
     def accounts(self, args):
         """按 --account 筛选后的账号目录。"""
@@ -3131,7 +3534,10 @@ def load_context(args):
     all_accts = account_dirs(roots)
     if not all_accts:
         sys.exit(t("No account directories found.", "没有找到任何账号目录。"))
-    return Context(projects, roots, all_accts, load_account_book(), cli_login_account())
+    book, cli_acct = load_account_book(), cli_login_account()
+    remember_accounts(book, all_accts, cli_acct)
+    missing = missing_accounts(book, all_accts, roots if args.desktop_root else None)
+    return Context(projects, roots, all_accts, book, cli_acct, missing)
 
 
 def read_indexes(accts):
@@ -3220,6 +3626,19 @@ def build_plan(args, ctx, interactive):
     fallback, any_fallback = fallback_templates(ctx, accts, indexes)
     root_of = {d: root for root, _, _, d in accts}
     book, cli_acct = ctx.book, ctx.cli_acct
+    orgs_of = {}
+    for _, a, o, _ in ctx.known_accts:
+        orgs_of.setdefault(a, []).append(o)
+
+    def tree_fields(acct, org, root):
+        """账号树要用的字段：客户端、账号名、组织名、是不是 CLI 登录的账号。"""
+        orgs = orgs_of.get(acct, [])
+        return {
+            "root": str(root) if root else "",
+            "acct_name": account_title(acct, book, cli_acct, orgs),
+            "org_name": org_title(acct, org, book, cli_acct, orgs),
+            "acct_cli": bool(cli_acct and cli_acct["account"] == acct),
+        }
 
     sessions, skipped = scan_cli_sessions(ctx.projects)
     if args.project:
@@ -3264,6 +3683,7 @@ def build_plan(args, ctx, interactive):
                     "label": account_label(acct, org, book, cli_acct),
                     "heading": account_heading(acct, org, book, cli_acct),
                     "short": account_short(acct, org, book, cli_acct),
+                    **tree_fields(acct, org, root_of[d]),
                 }
             )
         return rows, held_back
@@ -3282,7 +3702,42 @@ def build_plan(args, ctx, interactive):
         purge = plan_purge_all(ctx, excluded, args.project)
         if args.purge_archived is None and not purge[0]:
             purge = None  # 没要求清除、也没有可清除的，就不在预览里多显示一节
-    return SyncReport(rows, sessions, skipped, recent, held_back, purge, archived_global, deleted_global)
+    # --account 只看指定账号时，不再列出已经不在的账号；没选中的账号照样列出，标成"不处理"
+    roots = {str(r) for r in ctx.roots}
+
+    def root_seen(info):
+        seen = info.get("roots") or []
+        return next((r for r in seen if r in roots), seen[0] if seen else "")
+
+    missing = (
+        []
+        if args.account
+        else [
+            {**missing_row(a, o, info, book, cli_acct), **tree_fields(a, o, root_seen(info))}
+            for a, o, info in ctx.missing
+        ]
+    )
+    filtered = [
+        {"acct": a, "org": o, "filtered": True, "ids": f"{a[:8]}/{o[:8]}", **tree_fields(a, o, root)}
+        for root, a, o, d in ctx.all_accts
+        if d not in root_of
+    ]
+    return SyncReport(
+        rows, sessions, skipped, recent, held_back, purge, archived_global, deleted_global, missing, filtered
+    )
+
+
+def missing_row(acct, org, info, book, cli_acct):
+    return {
+        "acct": acct,
+        "org": org,
+        "missing": True,
+        "name": account_label(acct, org, book, cli_acct, with_cli=False),
+        "label": account_label(acct, org, book, cli_acct),
+        "ids": f"{acct[:8]}/{org[:8]}",
+        "last_seen": info.get("last_seen"),
+        "is_cli": is_cli_account(acct, org, cli_acct),  # CLI 登录的账号目录不在时也要认得出来
+    }
 
 
 def confirm_purge(args, report):
@@ -3308,8 +3763,6 @@ def confirm_purge(args, report):
 def write_plan(args, ctx, report, do_purge, interactive):
     """执行写入（和清除），打印结果；返回写入摘要。"""
     ensure_desktop_stopped(args.force, interactive)
-    if remember_cli_account(ctx.book, ctx.cli_acct):
-        save_account_book(ctx.book)
     created, moved = [], []
     for r in report.rows:
         if not r["template"]:
@@ -3432,10 +3885,18 @@ def run(argv=None):
         return
 
     ctx = load_context(args)
+    if args.forget_account:
+        given = [x for x in args.forget_account if x is not ASK]
+        if given:
+            forget_by_keys(given, ctx)
+        if ASK in args.forget_account:
+            need_terminal("--forget-account", interactive)
+            forget_wizard(ctx)
+        return
     if args.set_alias:
         given = [x for x in args.set_alias if x is not ASK]
         if given:
-            set_aliases(given, ctx.all_accts)
+            set_aliases(given, ctx.known_accts)
         if ASK in args.set_alias:
             need_terminal("--set-alias", interactive)
             alias_wizard(ctx)
@@ -3478,7 +3939,7 @@ def run(argv=None):
             )
             if x
         )
-        choice = hub_menu(report, can_undo, filters, len(read_exclude_file(default_exclude_file())))
+        choice = hub_menu(report, can_undo, filters, len(read_exclude_file(default_exclude_file())), len(ctx.missing))
         if choice == "undo":
             print()
             undo(args.force, interactive)
@@ -3487,6 +3948,8 @@ def run(argv=None):
             filter_menu(args, ctx)
         elif choice == "alias":
             alias_wizard(ctx)
+        elif choice == "forget":
+            forget_wizard(ctx)
         elif choice == "exclude":
             manage_exclude_file()
         elif choice == "settings":
