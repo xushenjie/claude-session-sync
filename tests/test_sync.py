@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -1178,3 +1179,116 @@ def test_table_shrinks_flex_column_before_dropping(monkeypatch):
     lines = cli.table("T", cols, rows, width=40)
     assert all(cli.disp_width(line) == 40 for line in lines)
     assert "12345678" in lines[3] and "…" in lines[3]
+
+
+# ---------------------------------------------------------------- 方向键选择
+
+
+def press(monkeypatch, *keys):
+    """模拟在终端里按键（方向键模式）。"""
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(cli, "_keys", iter(keys))
+
+
+def test_select_one_with_keys(monkeypatch, capsys):
+    opts = [{"label": "a", "value": "A"}, {"label": "group", "sep": True}, {"label": "b", "value": "B"}]
+    press(monkeypatch, "down", "enter")
+    assert cli.select_one("Pick", opts) == "B"  # 跳过分隔行
+    press(monkeypatch, "up", "up", "enter")
+    assert cli.select_one("Pick", opts) == "A"  # 循环移动
+    press(monkeypatch, "2")
+    assert cli.select_one("Pick", opts) == "B"  # 数字键直接选
+    press(monkeypatch, "esc")
+    assert cli.select_one("Pick", opts) is None
+    press(monkeypatch, "enter")
+    assert cli.select_one("Pick", opts, default=2) == "B"  # 回车 = 默认项
+
+
+def test_select_many_with_keys(monkeypatch):
+    opts = [{"label": "alpha"}, {"label": "beta"}, {"label": "gamma"}]
+    press(monkeypatch, "space", "enter")
+    assert cli.select_many("Pick", opts) == [1, 2]
+    press(monkeypatch, "a", "down", "space", "enter")
+    assert cli.select_many("Pick", opts) == [1]  # a 全不选，再勾一个
+    press(monkeypatch, "/", "g", "a", "enter", "a", "enter")
+    assert cli.select_many("Pick", opts, selected=[]) == [2]  # 筛选后 a 只作用于筛出来的项
+    press(monkeypatch, "esc")
+    assert cli.select_many("Pick", opts) is None
+
+
+def test_edit_form_with_keys(monkeypatch):
+    fields = [
+        {"label": "lang", "choices": [("en", "English"), ("zh", "中文")], "value": "en"},
+        {"label": "icons", "choices": [("symbols", "s"), ("emoji", "e"), ("ascii", "a")], "value": "symbols"},
+    ]
+    press(monkeypatch, "right", "down", "left", "enter")
+    assert cli.edit_form("Settings", fields) == {"lang": "zh", "icons": "ascii"}
+    press(monkeypatch, "right", "esc")
+    assert cli.edit_form("Settings", fields) is None
+
+
+def test_confirm_key(monkeypatch):
+    press(monkeypatch, "x", "y")
+    assert cli.confirm_key("Go?") is True
+    press(monkeypatch, "enter")
+    assert cli.confirm_key("Go?", default=True) is True
+    press(monkeypatch, "esc")
+    assert cli.confirm_key("Go?", default=True) is False
+
+
+def test_menu_with_keys(env, monkeypatch):
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    press(monkeypatch, "enter")  # 回车 = 按计划写入
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing", "new-1"]
+    env.add_cli_session("new-2")
+    press(monkeypatch, "down", "down", "enter", "y")  # 移到"撤销"并确认
+    env.run()
+    assert cli_ids(env.index_entries()) == ["existing"]
+
+
+def test_interactive_pick_with_keys(env, monkeypatch):
+    env.add_index("existing")
+    env.add_cli_session("a", text="task a")
+    env.add_cli_session("b", text="task b")
+    press(monkeypatch, "space", "enter", "n", "y")  # 去掉第一个，不记住，确认写入
+    env.run("-i")
+    assert len(cli_ids(env.index_entries())) == 2
+
+
+def test_screen_redraw_clips_long_lines(monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "40")
+    monkeypatch.setattr(cli, "_COLOR", False)
+    s = cli.Screen()
+    s.draw(["x" * 100, "中" * 50])
+    s.draw(["short"])
+    out = capsys.readouterr().out
+    assert "\033[2F" in out  # 第二次重画先回到区域开头
+    lines = [re.sub(r"\033\[[0-9;?]*[A-Za-z]", "", line) for line in out.split("\n")]
+    assert all(cli.disp_width(line) <= cli.term_width() - 1 for line in lines)  # 不会被终端自动折行
+
+
+def test_keys_fall_back_to_numbers_when_scripted(env, monkeypatch, capsys):
+    fake_terminal(monkeypatch, ["1"])  # 输入来自脚本：仍然用编号
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    env.run()
+    assert "[1]" in capsys.readouterr().out
+    assert cli_ids(env.index_entries()) == ["existing", "new-1"]
+
+
+def test_ctrl_c_exits_cleanly(env, monkeypatch, capsys):
+    def keys():
+        raise KeyboardInterrupt
+        yield
+
+    env.add_index("existing")
+    env.add_cli_session("new-1")
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(cli, "_keys", keys())
+    with pytest.raises(SystemExit) as e:
+        env.run()
+    assert e.value.code == 130
+    assert "Cancelled" in capsys.readouterr().err
+    assert cli_ids(env.index_entries()) == ["existing"]
