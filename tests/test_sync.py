@@ -63,12 +63,30 @@ def test_skips_archived_and_deleted(env):
 
 def test_skips_empty_and_running_sessions(env):
     env.add_index("existing")
-    env.add_cli_session("cmd-only", text="<command-name>/model</command-name>")
+    env.add_cli_session("cmd-only", text="<command-name>/model</command-name>", reply=False)
     import time
 
     env.add_cli_session("running", mtime=time.time())
     env.run("--apply")
     assert cli_ids(env.index_entries()) == ["existing"]
+
+
+def test_syncs_sessions_started_by_slash_command(env):
+    env.add_index("existing")
+    env.add_cli_session(
+        "slash",
+        text="<command-message>implement</command-message>\n<command-name>/implement</command-name>\n"
+        "<command-args>issues/01.md</command-args>",
+    )
+    env.add_cli_session("ide", text="<ide_opened_file>/work/demo/a.py</ide_opened_file>")
+    env.add_cli_session(
+        "ai-titled", text="<command-name>/implement</command-name>", extra=[{"type": "ai-title", "aiTitle": "AI 标题"}]
+    )
+    env.run("--apply")
+    titles = {e["cliSessionId"]: e["title"] for e in env.index_entries()}
+    assert titles["slash"] == "/implement issues/01.md"
+    assert titles["ide"] == "ide"  # 没有可用标题时退回文件名
+    assert titles["ai-titled"] == "AI 标题"
 
 
 def test_empty_account_borrows_template(env):
