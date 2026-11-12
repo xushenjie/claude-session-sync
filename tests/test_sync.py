@@ -335,7 +335,7 @@ def test_chinese_output(env, monkeypatch, capsys):
     env.add_cli_session("new-1")
     env.run()
     out = capsys.readouterr().out
-    assert "待补 1" in out and "预览模式" in out
+    assert "待补" in out and "aaaaaaaa/bbbbbbbb 1 +1" in squash(out) and "预览模式" in out
 
 
 def test_english_output(env, capsys):
@@ -343,7 +343,7 @@ def test_english_output(env, capsys):
     env.add_cli_session("new-1")
     env.run()
     out = capsys.readouterr().out
-    assert "to add 1" in out and "Preview only" in out
+    assert "to add" in out and "aaaaaaaa/bbbbbbbb 1 +1" in squash(out) and "Preview only" in out
     assert not any("\u4e00" <= ch <= "\u9fff" for ch in out.replace("…", ""))
 
 
@@ -422,7 +422,7 @@ def test_include_recent_syncs_and_warns(env, capsys):
     env.run("--apply", "--include-recent")
     assert cli_ids(env.index_entries()) == ["busy", "existing", "old"]
     out = capsys.readouterr().out
-    assert out.count("[still being written]") == 1  # 只标注最近写入的那个
+    assert out.count(f"{cli.sym('run')} still being written") == 1  # 只标注最近写入的那个
     assert "Included 1 session(s) still being written" in out
     assert "Skipped" not in out
 
@@ -507,9 +507,9 @@ def test_heading_shows_masked_cli_account(env, monkeypatch, capsys):
     env.org_dir(ACCT, ORG_EMPTY)
     env.run()
     out = capsys.readouterr().out
-    assert "[al***@example.com · current CLI login] (aaaaaaaa…/bbbbbbbb…)" in out
+    assert "al***@example.com ★ CLI login aaaaaaaa/bbbbbbbb" in squash(out)
     assert "alice@example.com" not in out  # 完整邮箱不能出现，组织名里的也不行
-    assert "[aaaaaaaa…/bbbbbbbb…] existing 0" in squash(out)  # 另一个组织没有名称
+    assert "✓ aaaaaaaa/bbbbbbbb 0 0" in squash(out)  # 另一个组织没有名称，只显示 ID
     assert not env.journal.exists()  # 预览不写账号记录
 
 
@@ -523,7 +523,7 @@ def test_apply_remembers_cli_account(env, monkeypatch, capsys):
     monkeypatch.setattr(cli, "cli_login_account", lambda: None)
     capsys.readouterr()
     env.run()
-    assert "[Acme · al***@example.com] (aaaaaaaa…/bbbbbbbb…)" in capsys.readouterr().out
+    assert "Acme · al***@example.com aaaaaaaa/bbbbbbbb" in squash(capsys.readouterr().out)
 
 
 def test_set_alias_and_remove(env, capsys):
@@ -534,8 +534,8 @@ def test_set_alias_and_remove(env, capsys):
     capsys.readouterr()
     env.run()
     out = capsys.readouterr().out
-    assert "[work] (aaaaaaaa…/bbbbbbbb…) existing 1" in squash(out)
-    assert "[side] (aaaaaaaa…/bbbbbbbb…) existing 0" in squash(out)
+    assert "work aaaaaaaa/bbbbbbbb 1" in squash(out)
+    assert "side aaaaaaaa/bbbbbbbb 0" in squash(out)
     env.run("--set-alias", "aaaaaaaa=")
     saved = json.loads((env.journal / "accounts.json").read_text())
     assert ACCT not in saved["aliases"] and f"{ACCT}/{ORG_EMPTY}" in saved["aliases"]
@@ -966,6 +966,7 @@ def test_save_defaults_roundtrip(env, capsys):
     assert cli.load_config() == {
         "lang": "en",
         "color": "auto",
+        "icons": "symbols",
         "purge_archived": True,
         "include_recent": False,
         "per_account_archive": False,
@@ -973,3 +974,75 @@ def test_save_defaults_roundtrip(env, capsys):
     env.run("--save-defaults", "--no-purge-archived")  # 再次保存时保留没改的项
     cfg = cli.load_config()
     assert cfg["purge_archived"] is False and cfg["lang"] == "en" and cfg["include_recent"] is False
+
+
+# ---------------------------------------------------------------- 输出样式
+
+
+def test_account_notes_explain_count_differences(env, capsys):
+    env.add_index("gone")  # 会话记录已不存在：孤立索引
+    env.add_index("old", archived=True, org=ORG_EMPTY)
+    env.add_index("keep")
+    env.add_index("keep", org=ORG_EMPTY)
+    env.add_cli_session("keep")
+    env.add_cli_session("old")
+    env.add_cli_session("cmd", text="<command-name>/model</command-name>", reply=False)
+    env.add_index("cmd")
+    env.run()
+    out = squash(capsys.readouterr().out)
+    assert "+1 orphaned · +1 command-only/empty" in out
+    assert "−1 archived" in out  # 在另一个组织归档过，所以这里也不补
+    assert "point to a deleted transcript" in out
+
+
+def test_sessions_grouped_by_project(env, capsys):
+    env.add_index("existing")
+    env.add_cli_session("a", cwd="/work/alpha", project="-work-alpha", text="task a")
+    env.add_cli_session("b", cwd="/work/beta", project="-work-beta", text="task b")
+    env.run()
+    out = capsys.readouterr().out
+    assert "▸ /work/alpha" in out and "▸ /work/beta" in out
+    assert out.index("/work/alpha") < out.index("task a") < out.index("/work/beta") < out.index("task b")
+
+
+def test_emoji_icons_and_alignment(env, capsys):
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    env.add_cli_session("new-1")
+    env.run("--icons", "emoji")
+    lines = capsys.readouterr().out.splitlines()
+    rows = [line for line in lines if "aaaaaaaa/bbbbbbbb" in line]
+    assert rows[0].lstrip().startswith("📥") and rows[1].lstrip().startswith("📥")
+    head = next(line for line in lines if "existing" in line)
+    # 表头"existing"的右端和数字的右端对齐（emoji 占两格）
+    end = cli.disp_width(head[: head.index("existing")]) + len("existing")
+    for row in rows:
+        i = row.index("aaaaaaaa/bbbbbbbb") + len("aaaaaaaa/bbbbbbbb")
+        num = row[i:].split()[0]
+        assert cli.disp_width(row[: i + row[i:].index(num)]) + len(num) == end
+
+
+def test_ascii_icons(env, capsys):
+    env.add_index("existing")
+    env.run("--icons", "ascii")
+    out = capsys.readouterr().out
+    assert "OK aaaaaaaa/bbbbbbbb" in out and "✓" not in out
+
+
+def test_disp_width_ignores_colors_and_handles_emoji():
+    assert cli.disp_width("\033[1;32mok\033[0m") == 2
+    assert cli.disp_width("⚠️") == 2 and cli.disp_width("⚠") == 1
+    assert cli.disp_width("✅中") == 4
+    assert cli.rpad("已有", 6) == "  已有"
+
+
+def test_write_summary_and_tips(env, capsys):
+    env.add_index("existing")
+    env.add_cli_session("existing")
+    env.add_cli_session("new-1")
+    env.run("--apply")
+    out = capsys.readouterr().out
+    assert "✓ Done" in out and "Created 1 file(s)" in out and "› journal:" in out
+    env.run()
+    out = capsys.readouterr().out
+    assert "Everything is in sync" in out and "last write" in out and "--save-defaults" in out
