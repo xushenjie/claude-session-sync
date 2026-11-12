@@ -1249,14 +1249,44 @@ def scan_cli_sessions(projects):
 # ---------------------------------------------------------------- 写入
 
 
+# 从模板沿用的字段：只有账号级的偏好设置。其余字段（prs、writtenBranches、gitAnchors、
+# folderPlace、lastAssistantUuid、rewindEdges、postTurnSummary 等）都属于模板那个会话，
+# 复制过去会让每个同步的会话都显示模板会话的 PR、分支和状态。
+# 桌面端 5.1231.2 自己收养 CLI 会话（fromCliTranscript）时也只写下面这些基础字段，其余由它运行时补齐。
+TEMPLATE_KEEP_KEYS = ("permissionMode", "chromePermissionMode")
+# 模板里有这些字段时写入空的初始值（会话级的授权、运行状态，不能沿用模板的值）
+TEMPLATE_RESET_KEYS = {
+    "alwaysAllowedReasons": list,
+    "sessionPermissionUpdates": list,
+    "interruptedAwaitingPerson": lambda: None,
+    "steeredByRemoteClient": lambda: None,
+}
+
+
+# 条目自己的字段（由 build_entry 按 CLI 会话写入）
+ENTRY_OWN_KEYS = (
+    "sessionId",
+    "cliSessionId",
+    "cwd",
+    "originCwd",
+    "createdAt",
+    "lastActivityAt",
+    "isArchived",
+    "title",
+    "name",
+)
+
+
+def base_fields(src):
+    """src 里沿用的偏好字段 + 置为初始值的会话级字段。"""
+    e = {k: copy.deepcopy(src[k]) for k in TEMPLATE_KEEP_KEYS if k in src}
+    e.update({k: make() for k, make in TEMPLATE_RESET_KEYS.items() if k in src})
+    return e
+
+
 def build_entry(template, s):
-    e = copy.deepcopy(template)
-    old_cwd = template.get("cwd")
     new_id = f"local_{uuid.uuid4()}"
-    # 模板里其他字段若等于旧 cwd，一并替换（避免指向别的项目）
-    for k, v in list(e.items()):
-        if isinstance(v, str) and old_cwd and v == old_cwd:
-            e[k] = s["cwd"]
+    e = base_fields(template)
     e.update(
         {
             "sessionId": new_id,
@@ -1265,22 +1295,11 @@ def build_entry(template, s):
             "originCwd": s["cwd"],
             "createdAt": s["createdAt"],
             "lastActivityAt": s["lastActivityAt"],
+            "isArchived": False,
         }
     )
-    for k in ("title", "name"):
-        if k in e:
-            e[k] = s["title"]
-    if "title" not in e and "name" not in e:
-        e["title"] = s["title"]
-    # 清除归档相关状态
-    for k in ("isArchived", "archived"):
-        if k in e:
-            e[k] = False
-    for k in ("archivedAt", "archived_at"):
-        if k in e:
-            e[k] = None
-    if isinstance(e.get("status"), str) and e["status"].lower() == "archived":
-        e["status"] = "idle"
+    # 旧格式用 name 存标题
+    e["name" if "name" in template and "title" not in template else "title"] = s["title"]
     return new_id, e
 
 
@@ -1448,6 +1467,101 @@ def journal_time(path):
         return dt.datetime.strptime(stamp, "%Y%m%d-%H%M%S-%f").strftime("%Y-%m-%d %H:%M:%S")
     except (IndexError, ValueError):
         return path.name
+
+
+# ---------------------------------------------------------------- 修复旧版写入的条目
+
+
+def journal_created_files():
+    """历次写入（未撤销的日志）新建的文件。"""
+    files = set()
+    for j in sorted(JOURNAL_DIR.glob("journal-*.json")) if JOURNAL_DIR.exists() else []:
+        try:
+            files |= {Path(f) for f in json.loads(j.read_text(encoding="utf-8")).get("created", [])}
+        except (OSError, ValueError, AttributeError):
+            continue
+    return files
+
+
+def is_polluted(entry):
+    """0.5.0 及以前的 build_entry 整份复制模板，条目里带着模板会话的 PR、分支、回合总结等。
+    lastAssistantCliSessionId 指向自己时，这些状态本就属于这个会话（同一会话同步到别的组织，
+    或之后在桌面端用过），保留不动。字段名在桌面端 5.1231.2 观察到。"""
+    owner = entry.get("lastAssistantCliSessionId")
+    if owner is not None and owner == entry.get("cliSessionId"):
+        return False
+    clean = set(ENTRY_OWN_KEYS) | set(TEMPLATE_KEEP_KEYS) | set(TEMPLATE_RESET_KEYS)
+    return any(k not in clean for k in entry)
+
+
+def clean_entry(entry):
+    """只留条目自己的字段（含当前的标题、归档状态）和权限模式，其余交给桌面端补齐。"""
+    e = base_fields(entry)
+    e.update({k: entry[k] for k in ENTRY_OWN_KEYS if k in entry})
+    return e
+
+
+def plan_repair(ctx):
+    """找出本工具以前写入、带着别的会话状态的索引条目。返回 [(账号目录, 文件, 条目)]，不做任何修改。"""
+    dirs = {d.resolve(): d for _, _, _, d in ctx.all_accts}
+    plan = []
+    for f in sorted(journal_created_files()):
+        d = dirs.get(f.parent.resolve()) if f.name.startswith("local_") else None
+        if not d or not f.is_file():
+            continue
+        try:
+            e = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(e, dict) and is_polluted(e):
+            plan.append((d, f, e))
+    return plan
+
+
+def repair(ctx, force=False, interactive=False):
+    plan = plan_repair(ctx)
+    if not plan:
+        print(t("No entries need repair.", "没有需要修复的条目。"))
+        return
+    print(
+        t(
+            f"{len(plan)} index entr{'y' if len(plan) == 1 else 'ies'} written by an older version carry another "
+            "session's state (pull requests, branches, turn summary, …):",
+            f"{len(plan)} 个旧版本写入的索引条目带着别的会话的状态（PR、分支、回合总结等）：",
+        )
+    )
+    label = {d: account_label(a, o, ctx.book, ctx.cli_acct) or f"{a[:8]}/{o[:8]}" for _, a, o, d in ctx.all_accts}
+    counts = {}
+    for d, _, _ in plan:
+        counts[d] = counts.get(d, 0) + 1
+    for d, n in counts.items():
+        print(f"  {label.get(d, d.name)}: {n}")
+    if interactive and not confirm_key(t("Repair them?", "修复这些条目？")):
+        print(t("Cancelled.", "已取消。"))
+        return
+    ensure_desktop_stopped(force, interactive)
+    stamp = new_stamp()
+    trash = JOURNAL_DIR / f"trash-{stamp}"
+    created, moved = [], []
+    for _, f, e in plan:
+        dst = trash / f.relative_to(f.anchor)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(f), str(dst))
+        moved.append((f, dst))
+        with open(f, "w", encoding="utf-8") as fh:
+            json.dump(clean_entry(e), fh, ensure_ascii=False, indent=2)
+        created.append(f)  # --undo 先删掉改写后的文件，再从备份还原
+    journal = write_journal(created, moved, stamp)
+    print(
+        style(sym("ok"), "green"),
+        t(
+            f"Repaired {len(plan)} entr{'y' if len(plan) == 1 else 'ies'}. Restart the desktop app; "
+            "if anything looks wrong, run --undo.",
+            f"已修复 {len(plan)} 个条目。请重启桌面端；如有问题运行 --undo 撤销。",
+        ),
+    )
+    tip(t(f"backup: {trash}", f"备份：{trash}"))
+    tip(t(f"journal: {journal}", f"日志：{journal}"))
 
 
 # ---------------------------------------------------------------- 清除已归档
@@ -2976,8 +3090,8 @@ def apply_lang_flag(argv, cfg=None):
         _LANG_ZH = cfg["lang"] == "zh"
 
 
-def hub_menu(report, can_undo, filters="", excluded=0, gone=0):
-    """终端里预览之后的总菜单。返回 write / pick / undo / filter / alias / exclude / settings / quit。
+def hub_menu(report, can_undo, filters="", excluded=0, gone=0, polluted=0):
+    """终端里预览之后的总菜单。返回 write / pick / undo / repair / filter / alias / exclude / settings / quit。
     有待补会话时默认（回车）写入，已全部同步时默认退出。"""
     options = [{"label": t("Sync", "同步"), "sep": True}]
     if report.has_work():
@@ -2994,6 +3108,15 @@ def hub_menu(report, can_undo, filters="", excluded=0, gone=0):
         )
     if can_undo:
         options.append({"key": "3", "value": "undo", "label": t("Undo the most recent write", "撤销最近一次写入")})
+    if polluted:
+        options.append(
+            {
+                "key": "r",
+                "value": "repair",
+                "label": t("Repair entries written by older versions", "修复旧版本写入的条目"),
+                "note": t(f"{polluted} entries", f"{polluted} 个"),
+            }
+        )
     options += [
         {"label": t("Manage", "管理"), "sep": True},
         {
@@ -3461,6 +3584,15 @@ Notes:
         ),
     )
     adv.add_argument(
+        "--repair",
+        action="store_true",
+        help=t(
+            "clean up index entries written by 0.5.0 or earlier that copied another session's pull requests, "
+            "branches and other state, then exit",
+            "清理 0.5.0 及以前写入、复制了别的会话 PR、分支等状态的索引条目，然后退出",
+        ),
+    )
+    adv.add_argument(
         "--show-template",
         action="store_true",
         help=t("print each account's template fields and exit", "显示各账号模板字段后退出"),
@@ -3901,6 +4033,9 @@ def run(argv=None):
             need_terminal("--set-alias", interactive)
             alias_wizard(ctx)
         return
+    if args.repair:
+        repair(ctx, args.force, interactive)
+        return
     if args.show_template:
         accts = ctx.accounts(args) if args.account and ASK not in args.account else ctx.all_accts
         if interactive and len(accts) > 1 and not args.account:
@@ -3939,7 +4074,18 @@ def run(argv=None):
             )
             if x
         )
-        choice = hub_menu(report, can_undo, filters, len(read_exclude_file(default_exclude_file())), len(ctx.missing))
+        choice = hub_menu(
+            report,
+            can_undo,
+            filters,
+            len(read_exclude_file(default_exclude_file())),
+            len(ctx.missing),
+            len(plan_repair(ctx)) if can_undo else 0,
+        )
+        if choice == "repair":
+            print()
+            repair(ctx, args.force, interactive)
+            return
         if choice == "undo":
             print()
             undo(args.force, interactive)
