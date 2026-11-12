@@ -92,6 +92,7 @@ def t(en, zh):
 _COLOR = False
 _UNICODE = True
 _ICONS = "symbols"  # symbols | emoji | ascii，见 --icons
+_BOXES = False  # 是否用框线面板和表格，见 --layout
 _input = input  # 测试里替换成假的输入
 
 ANSI = {"bold": "1", "dim": "2", "red": "31", "green": "32", "yellow": "33", "cyan": "36"}
@@ -111,6 +112,9 @@ SYMBOLS = {
     "group": ("▸", ">"),
     "sep": ("│", "|"),
     "minus": ("−", "-"),
+    "cur": ("●", "*"),  # 当前 CLI 登录的账号
+    "acct": ("●", "o"),  # 其他账号
+    "sel": ("❯", ">"),
 }
 # --icons emoji 时替换的符号；只选终端里固定占两格的 emoji，⚠️ 靠 U+FE0F 变成两格
 EMOJI = {
@@ -125,6 +129,8 @@ EMOJI = {
     "run": "⏳",
     "tip": "💡",
     "group": "📁",
+    "cur": "🟢",
+    "acct": "⚪",
 }
 ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
@@ -146,8 +152,9 @@ def _enable_windows_ansi():
         return False
 
 
-def setup_terminal(color="auto", icons="symbols"):
-    global _COLOR, _UNICODE, _ICONS
+def setup_terminal(color="auto", icons="symbols", layout="plain"):
+    """layout：auto 时只在终端里画框线；管道和日志里保持纯文本，方便复制。"""
+    global _COLOR, _UNICODE, _ICONS, _BOXES
     enc = getattr(sys.stdout, "encoding", None) or "ascii"
     try:
         "".join(u for u, _ in SYMBOLS.values()).encode(enc)
@@ -168,6 +175,11 @@ def setup_terminal(color="auto", icons="symbols"):
     else:
         isatty = getattr(sys.stdout, "isatty", lambda: False)()
         _COLOR = isatty and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb" and _enable_windows_ansi()
+    if layout == "auto":
+        isatty = getattr(sys.stdout, "isatty", lambda: False)()
+        _BOXES = isatty and os.environ.get("TERM") != "dumb"
+    else:
+        _BOXES = layout == "boxed"
 
 
 def style(text, *names):
@@ -257,6 +269,136 @@ def rpad(text, width):
 
 def term_width():
     return max(60, shutil.get_terminal_size((100, 24)).columns)
+
+
+# ---------------------------------------------------------------- 面板与表格
+#
+# 单元格用 (文字, 样式...) 表示：先按显示宽度截断/补齐，再上色，颜色控制码不会打乱对齐。
+
+PANEL_MAX = 100
+BOX_UNICODE = {
+    "tl": "╭",
+    "tr": "╮",
+    "bl": "╰",
+    "br": "╯",
+    "h": "─",
+    "v": "│",
+    "l": "├",
+    "r": "┤",
+    "t": "┬",
+    "b": "┴",
+    "x": "┼",
+}
+BOX_ASCII = {
+    "tl": "+",
+    "tr": "+",
+    "bl": "+",
+    "br": "+",
+    "h": "-",
+    "v": "|",
+    "l": "+",
+    "r": "+",
+    "t": "+",
+    "b": "+",
+    "x": "+",
+}
+
+
+def box_chars():
+    return BOX_UNICODE if _UNICODE and _ICONS != "ascii" else BOX_ASCII
+
+
+def panel_width():
+    return min(PANEL_MAX, term_width())
+
+
+def cell(text, *styles):
+    return (str(text), *styles)
+
+
+def render_cell(c, width, align="l"):
+    text, styles = c[0], c[1:]
+    text = fit(text, width)
+    padded = rpad(text, width) if align == "r" else pad(text, width)
+    if not styles:
+        return padded
+    # 只给文字上色，补齐用的空格不上色（反色高亮时例外，见 render_line）
+    lead = padded[: len(padded) - len(padded.lstrip(" "))] if align == "r" else ""
+    body = padded.strip(" ") if align == "r" else padded.rstrip(" ")
+    trail = "" if align == "r" else padded[len(body) :]
+    return lead + style(body, *styles) + trail
+
+
+def render_line(parts, width):
+    """把一行里的若干 (cell, 宽度或 None) 依次拼起来；宽度为 None 的部分占满剩余宽度。"""
+    fixed = sum(w for _, w in parts if w is not None) + 2 * (len(parts) - 1)
+    out = []
+    for c, w in parts:
+        out.append(render_cell(c, w if w is not None else max(1, width - fixed)))
+    line = "  ".join(out)
+    return line + " " * max(0, width - disp_width(line))
+
+
+def panel(title, lines, right="", title_styles=("bold",), width=None):
+    """带标题的面板。lines 是已经上好色的字符串，宽度不超过 width - 4。"""
+    b = box_chars()
+    width = width or panel_width()
+    inner = width - 2
+    head = f"{b['h']} {title} " if title else b["h"]
+    tail = f" {right} {b['h']}" if right else ""
+    fill = max(0, inner - disp_width(head) - disp_width(tail))
+    top = muted(b["tl"] + b["h"]) + (style(f" {title} ", *title_styles) if title else "") + muted(b["h"] * fill)
+    top += (muted(f" {right} " + b["h"]) if right else "") + muted(b["tr"])
+    out = [top]
+    for line in lines:
+        out.append(muted(b["v"]) + " " + line + " " * max(0, inner - 2 - disp_width(line)) + " " + muted(b["v"]))
+    out.append(muted(b["bl"] + b["h"] * inner + b["br"]))
+    return out
+
+
+def table(title, columns, rows, width=None, right=""):
+    """带标题的网格表格。columns：[{"h": 表头, "align": "l"/"r", "flex": 占剩余宽度, "drop": 窄屏时可省略}]；
+    rows：每行一个 cell 列表。"""
+    b = box_chars()
+    width = width or panel_width()
+    cols = list(columns)
+    keep = list(range(len(cols)))
+
+    def natural(i):
+        return max(disp_width(cols[i]["h"]), *(disp_width(r[i][0]) for r in rows)) if rows else disp_width(cols[i]["h"])
+
+    flex = next((i for i, c in enumerate(cols) if c.get("flex")), len(cols) - 1)
+    flex_min = 16  # 灵活列先缩到这个宽度（截断加省略号），还放不下才去掉可省略的列
+
+    def total(idx):
+        return sum((min(natural(i), flex_min) if i == flex else natural(i)) + 3 for i in idx) + 1
+
+    while total(keep) > width and any(cols[i].get("drop") for i in keep):  # 窄屏：先去掉可省略的列
+        keep.remove(next(i for i in keep if cols[i].get("drop")))
+    widths = {i: natural(i) for i in keep}
+    spare = width - total(keep)
+    widths[flex] = max(4, min(widths[flex], flex_min) + spare)  # 灵活列吸收多余或不足的宽度，表格和面板一样宽
+
+    def hline(left, mid, right_):
+        return muted(left + mid.join(b["h"] * (widths[i] + 2) for i in keep) + right_)
+
+    def row_line(cells):
+        parts = [" " + render_cell(cells[i], widths[i], cols[i].get("align", "l")) + " " for i in keep]
+        return muted(b["v"]) + muted(b["v"]).join(parts) + muted(b["v"])
+
+    inner = sum(widths[i] + 3 for i in keep) - 1
+    head = f"{b['h']} {title} "
+    tail = f" {right} {b['h']}" if right else ""
+    top = (
+        muted(b["tl"] + b["h"])
+        + style(f" {title} ", "bold")
+        + muted(b["h"] * max(0, inner - disp_width(head) - disp_width(tail)))
+    )
+    top += (muted(f" {right} " + b["h"]) if right else "") + muted(b["tr"])
+    out = [top, row_line([cell(c["h"], "dim") for c in cols]), hline(b["l"], b["x"], b["r"])]
+    out += [row_line(r) for r in rows]
+    out.append(hline(b["bl"], b["b"], b["br"]))
+    return out
 
 
 def short_path(path):
@@ -1217,29 +1359,20 @@ class SyncReport:
             parts.append(muted(extra))
         return "  ".join(parts)
 
-    def print_header(self, verbose):
-        sep = muted(f" {sym('sep')} ")
-        stats = [
+    # ---- 内容：两种布局（框线 / 纯文本）共用
+
+    def stats(self):
+        return [
             (t("CLI sessions", "CLI 会话"), len(self.sessions)),
             (t("accounts", "账号"), len(self.rows)),
             (t("archived/deleted", "已归档/删除"), len(self.archived_global)),
         ]
-        print(
-            style("claude-session-sync", "bold")
-            + muted(f" v{__version__}")
-            + "  "
-            + sep.join(f"{muted(k)} {style(str(v), 'bold')}" for k, v in stats)
+
+    def verbose_stats(self):
+        return t(
+            f"skipped {self.skipped} empty or without a working directory; deletion markers: {len(self.deleted_global)}",
+            f"跳过 {self.skipped} 个空会话/无 cwd 的记录；删除标记 {len(self.deleted_global)} 个",
         )
-        if verbose:
-            print(
-                muted(
-                    t(
-                        f"  skipped {self.skipped} empty or without a working directory; "
-                        f"deletion markers: {len(self.deleted_global)}",
-                        f"  跳过 {self.skipped} 个空会话/无 cwd 的记录；删除标记 {len(self.deleted_global)} 个",
-                    )
-                )
-            )
 
     def account_notes(self, r):
         """解释这个账号的数量为什么和别的账号不一样。"""
@@ -1256,43 +1389,175 @@ class SyncReport:
             notes.append(t(f"+{r['unusable']} command-only/empty", f"+{r['unusable']} 仅命令/空会话"))
         return " · ".join(notes)
 
+    def account_cells(self, r):
+        """一个账号的各列：图标、名称、ID、已有、待补、说明，都是 cell。"""
+        n = len(r["todo"])
+        if n and not r["template"]:
+            icon = cell(sym("warn"), "yellow")
+        elif r.get("is_cli"):
+            icon = cell(sym("cur"), "green")
+        else:
+            icon = cell(sym("acct"), "dim")
+        if n and not r["template"]:
+            count = cell(f"+{n}", "yellow")
+        elif n:
+            count = cell(f"+{n}", "cyan", "bold")
+        else:
+            count = cell("0", "dim")
+        note = self.account_notes(r)
+        if n and r["source"] == "borrowed":
+            note = t("borrows a template", "借用其他账号的模板") + (" · " + note if note else "")
+        note = (
+            cell(t("no template, skipped", "无模板，跳过"), "yellow")
+            if n and r["source"] == "none"
+            else cell(note, "dim")
+        )
+        name = cell(r["name"], "bold") if r.get("name") else cell(r["ids"], "dim")
+        ids = cell(r["ids"], "dim") if r.get("name") else cell("")
+        return icon, name, ids, cell(r["known"]), count, note
+
+    def cli_tag(self):
+        return t("current CLI login", "当前 CLI 登录")
+
+    def warnings(self, pending):
+        out = []
+        if any(len(r["todo"]) and r["source"] == "none" for r in self.rows):
+            out.append(t("Create a Code session in the desktop app first.", "请先在桌面端建一个 Code 会话，作为模板。"))
+        if self.held_back:
+            out.append(
+                t(
+                    f"Skipped {len(self.held_back)} session(s) written in the last 2 minutes (probably still running). "
+                    "Pass --include-recent to sync them anyway.",
+                    f"跳过 {len(self.held_back)} 个最近 2 分钟内仍在写入的会话（可能正在运行）。"
+                    "如需一并同步，加 --include-recent。",
+                )
+            )
+        included = [s for s, _ in pending if s["id"] in self.recent]
+        if included:
+            out.append(
+                t(
+                    f"Included {len(included)} session(s) still being written. Their title and last-activity "
+                    "time may be out of date, and don't type into the same session from the CLI and the desktop app "
+                    "at the same time.",
+                    f"包含了 {len(included)} 个最近仍在写入的会话。它们的标题和最后活动时间可能不是最新的，"
+                    "也不要在 CLI 和桌面端同时向同一个会话输入。",
+                )
+            )
+        return out
+
+    def tips(self):
+        out = []
+        orphans = sum(r.get("orphans", 0) for r in self.rows)
+        if orphans:
+            out.append(
+                t(
+                    f"{orphans} index entr{'y' if orphans == 1 else 'ies'} point to a deleted transcript; "
+                    "archive them in the desktop app, then --purge-archived removes them",
+                    f"{orphans} 条索引的会话记录已不存在（孤立索引）；在桌面端归档后，--purge-archived 会清理掉",
+                )
+            )
+        journals = sorted(JOURNAL_DIR.glob("journal-*.json")) if JOURNAL_DIR.exists() else []
+        if journals:
+            out.append(
+                t(
+                    f"last write {journal_time(journals[-1])}; undo with --undo",
+                    f"上次写入 {journal_time(journals[-1])}；撤销用 --undo",
+                )
+            )
+        if not config_file().exists():
+            out.append(
+                t(
+                    "save options you always pass with --save-defaults (e.g. --lang zh --save-defaults)",
+                    "常用参数可以用 --save-defaults 保存（如 --lang zh --save-defaults）",
+                )
+            )
+        return out
+
+    def purge_notes(self):
+        _, running, filtered = self.purge
+        out = []
+        if running:
+            out.append(
+                t(
+                    f"skipped {len(running)} archived session(s) still being written",
+                    f"跳过 {len(running)} 个最近仍在写入的归档会话",
+                )
+            )
+        if filtered:
+            out.append(
+                t(
+                    f"skipped {filtered} archived session(s) because of --exclude/--project",
+                    f"按 --exclude/--project 跳过 {filtered} 个归档会话",
+                )
+            )
+        return out
+
+    def plan_parts(self, pending):
+        parts = []
+        if self.n_files():
+            k = sum(1 for r in self.writable() if r["todo"])
+            parts.append(
+                (
+                    "add",
+                    t(
+                        f"add {len(pending)} session(s) ({self.n_files()} index file(s) in {k} account(s))",
+                        f"补 {len(pending)} 个会话（{k} 个账号共 {self.n_files()} 个索引文件）",
+                    ),
+                )
+            )
+        if self.purge_plan():
+            n = len(self.purge_plan())
+            parts.append(("del", t(f"delete {n} archived session(s)", f"彻底删除 {n} 个已归档会话")))
+        return parts
+
+    def more_text(self, more):
+        return t(
+            f"{sym('ell')} and {more} more (pass -v to list all)", f"{sym('ell')} 还有 {more} 个（加 -v 查看全部）"
+        )
+
+    def in_sync_text(self):
+        return f"{sym('ok')} " + t("Everything is in sync; nothing to add.", "已全部同步，没有需要补的会话。")
+
+    # ---- 纯文本布局：管道、日志、--layout plain
+
+    def print_header(self, verbose):
+        sep = muted(f" {sym('sep')} ")
+        print(
+            style("claude-session-sync", "bold")
+            + muted(f" v{__version__}")
+            + "  "
+            + sep.join(f"{muted(k)} {style(str(v), 'bold')}" for k, v in self.stats())
+        )
+        if verbose:
+            print(muted("  " + self.verbose_stats()))
+
     def print_accounts(self):
         print()
-        names = []
-        for r in self.rows:
-            if r.get("name"):
-                name = style(r["name"], "bold")
-                if r.get("is_cli"):
-                    name += " " + todo(f"{sym('star')} " + t("CLI login", "CLI 登录"))
-                names.append((name, muted(r["ids"])))
-            else:
-                names.append((muted(r["ids"]), ""))
-        w_name = max(disp_width(n) for n, _ in names)
-        w_id = max(disp_width(i) for _, i in names)
-        w_known = max(disp_width(t("existing", "已有")), *(len(str(r["known"])) for r in self.rows))
-        w_add = max(disp_width(t("to add", "待补")), *(len(str(len(r["todo"]))) + 1 for r in self.rows))
-        head = pad(t("Accounts", "账号"), 3 + disp_width(sym("ok")) + w_name + 2 + w_id)  # 缩进 + 图标 + 空格
-        cols = f"{rpad(t('existing', '已有'), w_known)}  {pad(t('to add', '待补'), w_add)}  {t('notes', '说明')}"
+        cells = [list(self.account_cells(r)) for r in self.rows]
+        for r, c in zip(self.rows, cells):
+            if r.get("is_cli") and r.get("name"):
+                c[1] = cell(f"{c[1][0]}  {self.cli_tag()}", *c[1][1:])  # 没有颜色时也能认出当前账号
+        w = [max(disp_width(c[i][0]) for c in cells) for i in range(6)]
+        w[3] = max(w[3], disp_width(t("existing", "已有")))
+        w[4] = max(w[4], disp_width(t("to add", "待补")))
+        head = pad(t("Accounts", "账号"), 2 + w[0] + 1 + w[1] + 2 + w[2])
+        cols = f"{rpad(t('existing', '已有'), w[3])}  {pad(t('to add', '待补'), w[4])}  {t('notes', '说明')}"
         print(style(head, "bold") + "  " + muted(cols))
-        for r, (name, ids) in zip(self.rows, names):
-            n = len(r["todo"])
-            if n and not r["template"]:
-                icon, count = caution(sym("warn")), caution(f"+{n}")
-            elif n:
-                icon, count = todo(sym("todo")), style(todo(f"+{n}"), "bold")
-            else:
-                icon, count = ok(sym("ok")), muted("0")
-            note = self.account_notes(r)
-            if n and r["source"] == "borrowed":
-                note = t("borrows a template", "借用其他账号的模板") + (" · " + note if note else "")
-            if n and r["source"] == "none":
-                note = caution(t("no template, skipped", "无模板，跳过"))
-            else:
-                note = muted(note)
-            line = f"  {icon} {pad(name, w_name)}  {pad(ids, w_id)}  {r['known']:>{w_known}}  {pad(count, w_add)}"
-            print((line + "  " + note).rstrip())
-        if any(len(r["todo"]) and r["source"] == "none" for r in self.rows):
-            tip(t("Create a Code session in the desktop app first.", "请先在桌面端建一个 Code 会话，作为模板。"))
+        for r, c in zip(self.rows, cells):
+            name = render_cell(c[1], w[1])
+            if r.get("is_cli") and r.get("name"):  # 名称加粗，标记用绿色
+                tag = self.cli_tag()
+                name = (
+                    style(r["name"], "bold")
+                    + "  "
+                    + ok(tag)
+                    + " " * (w[1] - disp_width(r["name"]) - 2 - disp_width(tag))
+                )
+            line = (
+                f"  {render_cell(c[0], w[0])} {name}  {render_cell(c[2], w[2])}  "
+                f"{render_cell(c[3], w[3], 'r')}  {render_cell(c[4], w[4])}  {render_cell(c[5], disp_width(c[5][0]))}"
+            )
+            print(line.rstrip())
 
     def print_pending(self, pending, verbose, limit):
         print()
@@ -1309,18 +1574,10 @@ class SyncReport:
             for s, targets in items:
                 print(self.session_line(s, targets, verbose, title_w, mark_col))
         if limit and len(pending) > limit:
-            more = len(pending) - limit
-            print(
-                muted(
-                    t(
-                        f"  {sym('ell')} and {more} more (pass -v to list all)",
-                        f"  {sym('ell')} 还有 {more} 个（加 -v 查看全部）",
-                    )
-                )
-            )
+            print(muted("  " + self.more_text(len(pending) - limit)))
 
     def print_purge(self, quiet, limit):
-        plan, running, filtered = self.purge
+        plan = self.purge[0]
         print()
         head = t(f"Archived sessions to purge ({len(plan)})", f"清除已归档会话（{len(plan)} 个）")
         print(style(head, "bold", "red") if plan else muted(head))
@@ -1332,53 +1589,11 @@ class SyncReport:
                 )
                 print(f"    {danger(sym('minus'))} {fit(str(title), 50)}  " + muted(f"{files}  {cid}"))
             if limit and len(plan) > limit:
-                more = len(plan) - limit
-                print(
-                    muted(
-                        t(
-                            f"  {sym('ell')} and {more} more (pass -v to list all)",
-                            f"  {sym('ell')} 还有 {more} 个（加 -v 查看全部）",
-                        )
-                    )
-                )
-        if running:
-            tip(
-                t(
-                    f"skipped {len(running)} archived session(s) still being written",
-                    f"跳过 {len(running)} 个最近仍在写入的归档会话",
-                )
-            )
-        if filtered:
-            tip(
-                t(
-                    f"skipped {filtered} archived session(s) because of --exclude/--project",
-                    f"按 --exclude/--project 跳过 {filtered} 个归档会话",
-                )
-            )
+                print(muted("  " + self.more_text(len(plan) - limit)))
+        for note in self.purge_notes():
+            tip(note)
 
-    def print_tips(self):
-        orphans = sum(r.get("orphans", 0) for r in self.rows)
-        if orphans:
-            tip(
-                t(
-                    f"{orphans} index entr{'y' if orphans == 1 else 'ies'} point to a deleted transcript; "
-                    "archive them in the desktop app, then --purge-archived removes them",
-                    f"{orphans} 条索引的会话记录已不存在（孤立索引）；在桌面端归档后，--purge-archived 会清理掉",
-                )
-            )
-        journals = sorted(JOURNAL_DIR.glob("journal-*.json")) if JOURNAL_DIR.exists() else []
-        if journals:
-            when = journal_time(journals[-1])
-            tip(t(f"last write {when}; undo with --undo", f"上次写入 {when}；撤销用 --undo"))
-        if not config_file().exists():
-            tip(
-                t(
-                    "save options you always pass with --save-defaults (e.g. --lang zh --save-defaults)",
-                    "常用参数可以用 --save-defaults 保存（如 --lang zh --save-defaults）",
-                )
-            )
-
-    def print_plan(self, verbose=False, quiet=False):
+    def print_plain(self, verbose, quiet):
         pending = self.pending()
         limit = None if verbose else LIST_LIMIT
         if not quiet:
@@ -1386,66 +1601,141 @@ class SyncReport:
             self.print_accounts()
             if pending:
                 self.print_pending(pending, verbose, limit)
-
-        included = [s for s, _ in pending if s["id"] in self.recent]
-        if self.held_back or included:
+        warnings = self.warnings(pending)
+        if warnings:
             print()
-        if self.held_back:
-            warn(
-                t(
-                    f"Skipped {len(self.held_back)} session(s) written in the last 2 minutes (probably still running). "
-                    "Pass --include-recent to sync them anyway.",
-                    f"跳过 {len(self.held_back)} 个最近 2 分钟内仍在写入的会话（可能正在运行）。"
-                    "如需一并同步，加 --include-recent。",
-                )
-            )
-        if included:
-            warn(
-                t(
-                    f"Included {len(included)} session(s) still being written. Their title and last-activity "
-                    "time may be out of date, and don't type into the same session from the CLI and the desktop app "
-                    "at the same time.",
-                    f"包含了 {len(included)} 个最近仍在写入的会话。它们的标题和最后活动时间可能不是最新的，"
-                    "也不要在 CLI 和桌面端同时向同一个会话输入。",
-                )
-            )
-
+        for w in warnings:
+            warn(w)
         if self.purge is not None:
             self.print_purge(quiet, limit)
-
         print()
         if not self.has_work():
-            print(
-                style(
-                    f"{sym('ok')} " + t("Everything is in sync; nothing to add.", "已全部同步，没有需要补的会话。"),
-                    "bold",
-                    "green",
-                )
-            )
+            print(style(self.in_sync_text(), "bold", "green"))
             if not quiet:
-                self.print_tips()
+                for x in self.tips():
+                    tip(x)
             return
-        parts = []
-        if self.n_files():
-            k = sum(1 for r in self.writable() if r["todo"])
-            parts.append(
-                todo(
-                    t(
-                        f"add {len(pending)} session(s) ({self.n_files()} index file(s) in {k} account(s))",
-                        f"补 {len(pending)} 个会话（{k} 个账号共 {self.n_files()} 个索引文件）",
-                    )
-                )
-            )
-        if self.purge_plan():
-            parts.append(
-                danger(
-                    t(
-                        f"delete {len(self.purge_plan())} archived session(s)",
-                        f"彻底删除 {len(self.purge_plan())} 个已归档会话",
-                    )
-                )
-            )
+        parts = [todo(text) if kind == "add" else danger(text) for kind, text in self.plan_parts(pending)]
         print(style(t("Plan: ", "计划："), "bold") + muted(t("; ", "；")).join(parts))
+
+    # ---- 框线布局：终端里默认使用
+
+    def boxed_accounts(self):
+        cols = [
+            {"h": ""},
+            {"h": t("Name", "名称")},
+            {"h": "ID", "drop": True},
+            {"h": t("existing", "已有"), "align": "r"},
+            {"h": t("to add", "待补"), "align": "r"},
+            {"h": t("notes", "说明"), "flex": True},
+        ]
+        rows = []
+        for r in self.rows:
+            c = list(self.account_cells(r))
+            if r.get("name"):  # 表格里只放主名称（别名或邮箱），完整信息太宽，会挤掉 ID 列
+                c[1] = cell(r["name"].split(" · ")[0], *c[1][1:])
+            if r.get("is_cli"):
+                c[1] = cell(f"{c[1][0]}  {t('CLI', '当前 CLI')}", "bold", "green")
+            rows.append(c)
+        return table(t("Accounts", "账号"), cols, rows)
+
+    def boxed_pending(self, pending, verbose, limit):
+        inner = panel_width() - 4
+        shown = pending[:limit]
+        tgt_w = min(28, max(disp_width(self.targets_text(tg)) for _, tg in shown))
+        running = f"{sym('run')} " + t("still being written", "运行中")
+        mark_w = disp_width(running) if any(s["id"] in self.recent for s, _ in shown) else 0
+        lines, groups = [], {}
+        for s, targets in shown:
+            groups.setdefault(s["cwd"], []).append((s, targets))
+        for cwd, items in groups.items():
+            lines.append(muted(fit(f"{sym('group')} {short_path(cwd)}", inner)))
+            for s, targets in items:
+                parts = [(cell(f"  {format_time(s['lastActivityAt'])}", "dim"), 13), (cell(s["title"]), None)]
+                if mark_w:
+                    parts.append((cell(running if s["id"] in self.recent else "", "yellow"), mark_w))
+                if tgt_w:
+                    parts.append((cell(self.targets_text(targets), "dim"), tgt_w))
+                if verbose:
+                    parts.append((cell(s["id"], "dim"), 36))
+                lines.append(render_line(parts, inner))
+        if limit and len(pending) > limit:
+            lines.append(muted(self.more_text(len(pending) - limit)))
+        return panel(t(f"Sessions to add ({len(pending)})", f"待补会话（{len(pending)} 个）"), lines)
+
+    def boxed_purge(self, quiet, limit):
+        plan = self.purge[0]
+        inner = panel_width() - 4
+        lines = []
+        if not quiet:
+            for cid, title, idx_hits, cli_hits in plan[:limit]:
+                files = t(
+                    f"{len(idx_hits)} index file(s), {len(cli_hits)} CLI file(s)",
+                    f"索引 {len(idx_hits)} 个 · CLI 文件 {len(cli_hits)} 个",
+                )
+                lines.append(
+                    render_line(
+                        [
+                            (cell(sym("minus"), "red"), 1),
+                            (cell(str(title)), None),
+                            (cell(f"{files}  {cid[:8]}", "dim"), None),
+                        ],
+                        inner,
+                    )
+                )
+            if limit and len(plan) > limit:
+                lines.append(muted(self.more_text(len(plan) - limit)))
+        lines += [muted(f"{sym('tip')} {x}") for x in self.purge_notes() for x in [fit(x, inner - 2)]]
+        head = t(f"Archived sessions to purge ({len(plan)})", f"清除已归档会话（{len(plan)} 个）")
+        return panel(
+            head,
+            lines or [muted(t("nothing to purge", "没有可清除的会话"))],
+            title_styles=("bold", "red") if plan else ("dim",),
+        )
+
+    def boxed_plan(self, pending, quiet):
+        inner = panel_width() - 4
+
+        def wrapped(prefix, text, *styles):
+            rows = wrap_display(text, inner - disp_width(prefix) - 1)
+            return [style(prefix + " " + rows[0], *styles)] + [
+                style(" " * (disp_width(prefix) + 1) + r, *styles) for r in rows[1:]
+            ]
+
+        lines = []
+        if not self.has_work():
+            lines.append(style(self.in_sync_text(), "bold", "green"))
+        for kind, text in self.plan_parts(pending):
+            lines += wrapped(sym("add") if kind == "add" else sym("minus"), text, "cyan" if kind == "add" else "red")
+        for w in self.warnings(pending):
+            lines += wrapped(sym("warn"), w, "yellow")
+        if not self.has_work() and not quiet:
+            for x in self.tips():
+                lines += wrapped(sym("tip"), x, "dim")
+        return panel(t("Plan", "计划"), lines)
+
+    def print_boxed(self, verbose, quiet):
+        pending = self.pending()
+        limit = None if verbose else LIST_LIMIT
+        out = []
+        if not quiet:
+            ver = f"claude-session-sync {__version__}"
+            line = muted("  ·  ").join(f"{muted(k)} {style(str(v), 'bold')}" for k, v in self.stats())
+            lines = [line] + ([muted(self.verbose_stats())] if verbose else [])
+            out += panel(ver, lines)
+            out += self.boxed_accounts()
+            if pending:
+                out += self.boxed_pending(pending, verbose, limit)
+        if self.purge is not None and (self.purge[0] or not quiet):
+            out += self.boxed_purge(quiet, limit)
+        out += self.boxed_plan(pending, quiet)
+        print("\n".join(out))
+
+    def print_plan(self, verbose=False, quiet=False):
+        if _BOXES:
+            self.print_boxed(verbose, quiet)
+        else:
+            self.print_plain(verbose, quiet)
 
     def to_json(self, applied, purged, written):
         def iso(ms):
@@ -1505,6 +1795,7 @@ CONFIG_KEYS = {
     "lang": ("en", "zh"),
     "color": ("auto", "always", "never"),
     "icons": ("symbols", "emoji", "ascii"),
+    "layout": ("auto", "boxed", "plain"),
     "purge_archived": bool,
     "include_recent": bool,
     "per_account_archive": bool,
@@ -1647,7 +1938,7 @@ def wrap_display(text, width):
         if token.isspace():
             token = " "
         closing = re.fullmatch(r"[>)\]）】」』，。、；：！？]+", token)  # 行首不放闭合标点
-        if line and not closing and disp_width(line.rstrip() + token.rstrip()) > width:
+        if line and not closing and disp_width((line + token).rstrip()) > width:
             lines.append(line.rstrip())
             line = "" if token == " " else token
         else:
@@ -1836,9 +2127,9 @@ Notes:
         "--save-defaults",
         action="store_true",
         help=t(
-            "save --lang, --color, --icons, --[no-]purge-archived, --[no-]include-recent and "
+            "save --lang, --color, --icons, --layout, --[no-]purge-archived, --[no-]include-recent and "
             "--[no-]per-account-archive of this run to ~/.claude-desktop-sync/config.toml, then continue",
-            "把本次的 --lang、--color、--icons、--[no-]purge-archived、--[no-]include-recent、"
+            "把本次的 --lang、--color、--icons、--layout、--[no-]purge-archived、--[no-]include-recent、"
             "--[no-]per-account-archive 保存到 ~/.claude-desktop-sync/config.toml 作为默认值，然后照常运行",
         ),
     )
@@ -1928,6 +2219,16 @@ Notes:
         ),
     )
 
+    out.add_argument(
+        "--layout",
+        choices=["auto", "boxed", "plain"],
+        default="auto",
+        help=t(
+            "boxed panels and tables, or plain text (default: auto, boxed only in a terminal)",
+            "框线面板和表格，或纯文本（默认 auto：只在终端里画框线）",
+        ),
+    )
+
     adv = ap.add_argument_group(t("Advanced", "高级选项"))
     adv.add_argument(
         "--per-account-archive",
@@ -1994,7 +2295,7 @@ def main(argv=None):
     if args.completion:
         print(zsh_completion(ap), end="")
         return
-    setup_terminal("never" if args.json else args.color, args.icons)
+    setup_terminal("never" if args.json else args.color, args.icons, "plain" if args.json else args.layout)
     if args.save_defaults:
         saved = {k: getattr(args, k) for k in CONFIG_KEYS if getattr(args, k) is not None}
         p = save_config(saved)
