@@ -41,8 +41,38 @@ def test_apply_adds_missing_sessions_from_template(env):
     new = entries["new-1"]
     assert new["cwd"] == new["originCwd"] == "/work/other"
     assert new["title"] == "fix the bug"
-    assert new["model"] == "test-model"  # 其他字段沿用模板
+    assert "model" not in new  # 模板会话自己的状态不沿用
     assert new["sessionId"].startswith("local_")
+
+
+def test_new_entries_do_not_inherit_template_session_state(env):
+    p = env.add_index("existing")
+    tpl = json.loads(p.read_text(encoding="utf-8"))
+    tpl.update(
+        {
+            "permissionMode": "acceptEdits",
+            "chromePermissionMode": "ask",
+            "alwaysAllowedReasons": ["x"],
+            "sessionPermissionUpdates": [{"rule": "x"}],
+            "prs": [{"repo": "someone/other-repo", "prNumber": 2, "state": "merged"}],
+            "writtenBranches": ["feat/other"],
+            "gitAnchors": [{"gitRoot": "/work/demo"}],
+            "folderPlace": {"cwd": "/work/demo"},
+            "lastAssistantUuid": "a1b2c3d4",
+            "turnWrapUp": {"description": "done"},
+        }
+    )
+    p.write_text(json.dumps(tpl), encoding="utf-8")
+    env.add_cli_session("existing")
+    env.add_cli_session("new-1", cwd="/work/other")
+    env.run("--apply")
+    new = {e["cliSessionId"]: e for e in env.index_entries()}["new-1"]
+    assert new["permissionMode"] == "acceptEdits"
+    assert new["chromePermissionMode"] == "ask"
+    assert new["alwaysAllowedReasons"] == [] and new["sessionPermissionUpdates"] == []
+    assert new["isArchived"] is False
+    for k in ("prs", "writtenBranches", "gitAnchors", "folderPlace", "lastAssistantUuid", "turnWrapUp", "model"):
+        assert k not in new, k
 
 
 def test_rerun_is_idempotent(env):
@@ -1781,3 +1811,77 @@ def test_accounts_grouped_by_client_when_there_are_several(env, monkeypatch, cap
     ]
     assert len(heads) == 2 and body[heads[1] - 1].startswith("├")  # 每个客户端一节，中间用横线隔开
     assert "eeeeeeee" in body[heads[1] + 1]
+
+
+TEMPLATE_STATE = {
+    "permissionMode": "acceptEdits",
+    "sessionPermissionUpdates": [{"rule": "x"}],
+    "prs": [{"repo": "someone/other-repo", "prNumber": 2, "state": "merged"}],
+    "writtenBranches": ["feat/other"],
+    "lastAssistantCliSessionId": "tpl",
+    "turnWrapUp": {"description": "done"},
+}
+
+
+def old_style_entry(env, cli_id, owner="tpl", journal=True, **extra):
+    """模拟 0.5.0 写入的条目：整份复制了模板会话（cliSessionId=tpl）的状态，并记进写入日志。"""
+    p = env.add_index(cli_id)
+    e = json.loads(p.read_text(encoding="utf-8"))
+    e.update(TEMPLATE_STATE, lastAssistantCliSessionId=owner, **extra)
+    p.write_text(json.dumps(e), encoding="utf-8")
+    if journal:
+        cli.write_journal([p])
+    return p
+
+
+def test_repair_cleans_old_entries_and_undo_restores(env, capsys):
+    env.add_index("tpl")
+    bad = old_style_entry(env, "s1", isArchived=True)
+    before = bad.read_text(encoding="utf-8")
+    own = old_style_entry(env, "s2", owner="s2")  # 状态本就属于自己，不动
+    other = old_style_entry(env, "s3", journal=False)  # 不是本工具写入的，不动
+    own_text, other_text = own.read_text(encoding="utf-8"), other.read_text(encoding="utf-8")
+    env.run("--repair")
+    assert "1 index entry written by an older version" in capsys.readouterr().out
+    e = json.loads(bad.read_text(encoding="utf-8"))
+    assert e["cliSessionId"] == "s1" and e["title"] == "title of s1" and e["isArchived"] is True
+    assert e["permissionMode"] == "acceptEdits" and e["sessionPermissionUpdates"] == []
+    for k in ("prs", "writtenBranches", "lastAssistantCliSessionId", "turnWrapUp", "model"):
+        assert k not in e, k
+    assert own.read_text(encoding="utf-8") == own_text
+    assert other.read_text(encoding="utf-8") == other_text
+    env.run("--repair")
+    assert "No entries need repair." in capsys.readouterr().out
+    cli.main(["--undo"])
+    assert bad.read_text(encoding="utf-8") == before
+
+
+def test_repair_refuses_when_desktop_running(env, monkeypatch):
+    env.add_index("tpl")
+    bad = old_style_entry(env, "s1")
+    before = bad.read_text(encoding="utf-8")
+    monkeypatch.setattr(cli, "desktop_running", lambda: True)
+    with pytest.raises(SystemExit):
+        env.run("--repair")
+    assert bad.read_text(encoding="utf-8") == before
+
+
+def test_menu_repair_option(env, monkeypatch, capsys):
+    env.add_index("tpl")
+    env.add_cli_session("tpl")
+    bad = old_style_entry(env, "s1")
+    env.add_cli_session("s1")
+    fake_terminal(monkeypatch, ["r", "y"])  # 菜单选修复，再确认
+    env.run()
+    assert "Repair entries written by older versions" in capsys.readouterr().out
+    assert "prs" not in json.loads(bad.read_text(encoding="utf-8"))
+
+
+def test_menu_hides_repair_when_clean(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.add_cli_session("existing")
+    env.add_cli_session("new-1")
+    env.run("--apply")
+    fake_terminal(monkeypatch, ["q"])
+    env.run()
+    assert "Repair entries" not in capsys.readouterr().out

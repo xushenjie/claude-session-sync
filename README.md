@@ -171,6 +171,7 @@ When both input and output are a terminal, the preview always ends with the **Wh
 | `1` / Enter | Write the plan above |
 | `2` | Pick accounts and sessions first, then write |
 | `3` | Undo the most recent write (shown when there is one) |
+| `r` | Repair entries written by 0.5.0 or earlier (shown when there are any; same as `--repair`) |
 | `f` | Only some accounts or a project; the preview is rebuilt |
 | `n` | Name accounts (see [Account names](https://github.com/xushenjie/claude-session-sync#account-names)) |
 | `g` | Forget accounts whose directory is gone (shown when there are any) |
@@ -227,7 +228,7 @@ These options open a list when you leave out the value: `--lang`, `--color`, `--
 | Empty sessions (no user message) or transcripts without a working directory | Skipped |
 | `.jsonl` files in subfolders of a project directory (subagents etc.) | Not scanned |
 
-Each new index file is **cloned from an existing desktop session in the same account**: only the session ID, `cliSessionId`, working directory, title, and timestamps are replaced, so the rest matches your current desktop version as closely as possible. Accounts without sessions borrow a template from another account, preferring the same desktop data directory.
+Each new index file is **based on an existing desktop session in the same account**: it keeps only the template's permission modes and writes its own session ID, `cliSessionId`, working directory, title and timestamps. Everything that belongs to the template session itself (pull requests, branches, git anchors, turn summaries, …) is left out, and the desktop app fills it in, the same way it does when it adopts a CLI session itself. Accounts without sessions borrow a template from another account, preferring the same desktop data directory.
 
 Session titles come from, in order: custom title → summary → first user message, truncated to 60 characters.
 
@@ -323,6 +324,7 @@ Run `claude-session-sync -h` for the same list, grouped the same way, with commo
 | `--force` | Run `--apply` or `--undo` even while the desktop app is running (not recommended; the app may overwrite the changes) |
 | `--projects-dir <path>` | CLI sessions directory; defaults to `~/.claude/projects` and honors `CLAUDE_CONFIG_DIR` |
 | `--desktop-root <path>` | Path to a `claude-code-sessions` directory; repeatable |
+| `--repair` | Clean up index entries written by 0.5.0 or earlier that copied another session's pull requests, branches and other state, then exit (undo with `--undo`) |
 | `--show-template` | Print each account's template fields and exit (for troubleshooting) |
 
 **Other**
@@ -427,7 +429,7 @@ Not sure which one you used? `uv tool list` or `pipx list` will show it.
 ## Known limitations
 
 - **The index format is inferred from existing files.** Archived state is recognized from `isArchived`, `archived`, `archivedAt`, `status: "archived"`, and `archived-sessions.idx`; deletions from `deleted_<session-id>` markers. If a desktop update changes the format, `is_archived()` or `load_markers()` need updating.
-- **Templates copy most fields from the original session as-is** (e.g. `envScopeId`, `postTurnSummary`). If a session misbehaves after borrowing a template from another account, run `--undo` first.
+- **Entries written by 0.5.0 or earlier copied most fields from the template session**, including its pull requests, so those sessions show another repository's PRs in the sidebar. Quit the desktop app and run `--repair` (or press `r` in the menu) to clean them up; only entries the tool wrote (found through the journals) are touched.
 - **Windows and Linux support is experimental.** Development and real-data testing happen on macOS; on Windows and Linux only the automated tests have run, so the desktop data paths and index format there are unverified. Reports (with redacted `--show-template` output) are very welcome.
 - **On Windows, the desktop app and a natively installed CLI are both `claude.exe`**, so the tool tells them apart by install path. If it can't tell, it prints a warning instead of refusing — make sure the desktop app is quit yourself.
 - **Running-app detection on Linux is best effort.** There is no official Linux desktop app; the tool only looks for processes named `Claude` or `claude-desktop`. Make sure the app is closed yourself.

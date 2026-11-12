@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `--repair` and the menu key `r` clean up index entries that 0.5.0 or earlier wrote with another session's state. Only entries the tool created (found through the journals) are changed, the originals are backed up, and `--undo` restores them.
+
+### Fixed
+- Synced sessions no longer copy the template session's own state. Before, every new entry inherited the template's pull requests, branches, git anchors and turn summary, so the desktop sidebar showed another repository's PRs on every synced session. New entries now carry over only the permission modes and leave the rest for the desktop app to fill in, just like the desktop app does when it adopts a CLI session itself (observed in desktop 5.1231.2).
+
 ## [0.5.0] - 2026-11-12
 
 ### Added
