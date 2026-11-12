@@ -507,9 +507,9 @@ def test_heading_shows_masked_cli_account(env, monkeypatch, capsys):
     env.org_dir(ACCT, ORG_EMPTY)
     env.run()
     out = capsys.readouterr().out
-    assert "al***@example.com ★ CLI login aaaaaaaa/bbbbbbbb" in squash(out)
+    assert "● al***@example.com current CLI login aaaaaaaa/bbbbbbbb" in squash(out)
     assert "alice@example.com" not in out  # 完整邮箱不能出现，组织名里的也不行
-    assert "✓ aaaaaaaa/bbbbbbbb 0 0" in squash(out)  # 另一个组织没有名称，只显示 ID
+    assert "● aaaaaaaa/bbbbbbbb 0 0" in squash(out)  # 另一个组织没有名称，只显示 ID
     assert not env.journal.exists()  # 预览不写账号记录
 
 
@@ -967,6 +967,7 @@ def test_save_defaults_roundtrip(env, capsys):
         "lang": "en",
         "color": "auto",
         "icons": "symbols",
+        "layout": "auto",
         "purge_archived": True,
         "include_recent": False,
         "per_account_archive": False,
@@ -1012,7 +1013,7 @@ def test_emoji_icons_and_alignment(env, capsys):
     env.run("--icons", "emoji")
     lines = capsys.readouterr().out.splitlines()
     rows = [line for line in lines if "aaaaaaaa/bbbbbbbb" in line]
-    assert rows[0].lstrip().startswith("📥") and rows[1].lstrip().startswith("📥")
+    assert rows[0].lstrip().startswith("⚪") and rows[1].lstrip().startswith("⚪")  # 都不是当前 CLI 账号
     head = next(line for line in lines if "existing" in line)
     # 表头"existing"的右端和数字的右端对齐（emoji 占两格）
     end = cli.disp_width(head[: head.index("existing")]) + len("existing")
@@ -1026,7 +1027,7 @@ def test_ascii_icons(env, capsys):
     env.add_index("existing")
     env.run("--icons", "ascii")
     out = capsys.readouterr().out
-    assert "OK aaaaaaaa/bbbbbbbb" in out and "✓" not in out
+    assert "o aaaaaaaa/bbbbbbbb" in out and "●" not in out and "✓" not in out
 
 
 def test_disp_width_ignores_colors_and_handles_emoji():
@@ -1070,6 +1071,7 @@ def test_help_groups_and_examples(monkeypatch, capsys):
 def test_wrap_display():
     assert cli.wrap_display("中文中文中文", 6) == ["中文中", "文中文"]
     assert cli.wrap_display("aa --no-purge-archived bb", 12) == ["aa", "--no-purge-archived", "bb"]
+    assert cli.wrap_display("aaaa bbbb", 8) == ["aaaa", "bbbb"]  # 算上中间的空格是 9，必须换行
     assert cli.wrap_display("加 /<组织ID前缀>", 15) == ["加 /<组织ID前缀>"]  # 闭合符号不单独放到行首
 
 
@@ -1110,3 +1112,69 @@ def test_zsh_completion_parses(tmp_path, capsys):
     script = tmp_path / "_css.zsh"
     script.write_text(capsys.readouterr().out, encoding="utf-8")
     subprocess.run(["zsh", "-n", str(script)], check=True)
+
+
+# ---------------------------------------------------------------- 框线布局
+
+
+def boxed_lines(capsys):
+    return [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+
+
+def test_boxed_layout_panels_are_aligned(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "80")
+    monkeypatch.setattr(cli, "cli_login_account", lambda: dict(CLI_ACCT))
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    env.add_cli_session("new-1", text="一个很长的中文标题" * 8)
+    env.run("--layout", "boxed")
+    lines = boxed_lines(capsys)
+    boxed = [line for line in lines if line[0] in "╭│├╰"]
+    assert all(cli.disp_width(line) == 80 for line in boxed)  # 所有面板一样宽，中文也对齐
+    out = "\n".join(lines)
+    for title in ("Accounts", "Sessions to add (1)", "Plan"):
+        assert f"─ {title} ─" in out
+    assert "al***@example.com  CLI" in out and "aaaaaaaa/bbbbbbbb" in out
+    assert "…" in out  # 长标题按宽度截断
+
+
+def test_boxed_layout_drops_id_column_when_narrow(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "60")
+    monkeypatch.setattr(cli, "cli_login_account", lambda: dict(CLI_ACCT))
+    env.add_index("existing")
+    env.run("--layout", "boxed")
+    lines = boxed_lines(capsys)
+    assert all(cli.disp_width(line) == 60 for line in lines if line[0] in "╭│├╰")
+    assert "aaaaaaaa/bbbbbbbb" not in "\n".join(lines)
+
+
+def test_boxed_ascii_fallback(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "80")
+    env.add_index("existing")
+    env.run("--layout", "boxed", "--icons", "ascii")
+    out = capsys.readouterr().out
+    assert "+- Accounts -" in out and "╭" not in out and "│" not in out
+
+
+def test_layout_auto_is_plain_when_piped(env, capsys):
+    env.add_index("existing")
+    env.run()
+    assert "╭" not in capsys.readouterr().out
+
+
+def test_boxed_in_sync_shows_tips_in_plan_panel(env, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "80")
+    env.add_index("existing")
+    env.add_cli_session("existing")
+    env.run("--layout", "boxed")
+    out = capsys.readouterr().out
+    assert "Everything is in sync" in out and "› save options you always pass" in out
+
+
+def test_table_shrinks_flex_column_before_dropping(monkeypatch):
+    monkeypatch.setattr(cli, "_UNICODE", True)
+    cols = [{"h": "a"}, {"h": "id", "drop": True}, {"h": "notes", "flex": True}]
+    rows = [[cli.cell("x"), cli.cell("12345678"), cli.cell("n" * 60)]]
+    lines = cli.table("T", cols, rows, width=40)
+    assert all(cli.disp_width(line) == 40 for line in lines)
+    assert "12345678" in lines[3] and "…" in lines[3]
