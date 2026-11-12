@@ -109,9 +109,9 @@ A preview looks like this (made-up data):
 claude-session-sync  CLI sessions 5 │ accounts 3 │ archived/deleted 1
 
 Accounts                                              existing  to add  notes
-  ↓ work                           66864cb7/ed1ba056         2  +2      −1 running
-  ↓ al***@example.com ★ CLI login  b8073c71/677f8bdf         2  +1      −1 archived · −1 running
-  ↓ b8073c71/ed1ba056                                        2  +1      −1 archived · −1 running
+  ↓ work                           1a2b3c4d/9f8e7d6c         2  +2      −1 running
+  ↓ al***@example.com ★ CLI login  5e6f7a8b/0c1d2e3f         2  +1      −1 archived · −1 running
+  ↓ 5e6f7a8b/9f8e7d6c                                        2  +1      −1 archived · −1 running
 
 Sessions to add (2)
   ▸ ~/work/docs
@@ -122,7 +122,7 @@ Sessions to add (2)
 ⚠ Skipped 1 session(s) written in the last 2 minutes (probably still running). Pass --include-recent to sync them anyway.
 
 Archived sessions to purge (1)
-    − Old experiment  1 index file(s), 1 CLI file(s)  3f7443f3-b4cb-4918-949d-a364c326a110
+    − Old experiment  1 index file(s), 1 CLI file(s)  4d5e6f70-1a2b-4c3d-8e9f-0a1b2c3d4e5f
 
 Plan: add 2 session(s) (4 index file(s) in 3 account(s)); delete 1 archived session(s)
 

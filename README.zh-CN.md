@@ -109,9 +109,9 @@ claude-session-sync --undo
 claude-session-sync  CLI 会话 5 │ 账号 3 │ 已归档/删除 1
 
 账号                                                 已有  待补  说明
-  ↓ 工作号                        66864cb7/ed1ba056     2  +2    −1 运行中
-  ↓ al***@example.com ★ CLI 登录  b8073c71/677f8bdf     2  +1    −1 已归档 · −1 运行中
-  ↓ b8073c71/ed1ba056                                   2  +1    −1 已归档 · −1 运行中
+  ↓ 工作号                        1a2b3c4d/9f8e7d6c     2  +2    −1 运行中
+  ↓ al***@example.com ★ CLI 登录  5e6f7a8b/0c1d2e3f     2  +1    −1 已归档 · −1 运行中
+  ↓ 5e6f7a8b/9f8e7d6c                                   2  +1    −1 已归档 · −1 运行中
 
 待补会话（2 个）
   ▸ ~/work/docs
@@ -122,7 +122,7 @@ claude-session-sync  CLI 会话 5 │ 账号 3 │ 已归档/删除 1
 ⚠ 跳过 1 个最近 2 分钟内仍在写入的会话（可能正在运行）。如需一并同步，加 --include-recent。
 
 清除已归档会话（1 个）
-    − 旧实验  索引 1 个 · CLI 文件 1 个  3f7443f3-b4cb-4918-949d-a364c326a110
+    − 旧实验  索引 1 个 · CLI 文件 1 个  4d5e6f70-1a2b-4c3d-8e9f-0a1b2c3d4e5f
 
 计划：补 2 个会话（3 个账号共 4 个索引文件）；彻底删除 1 个已归档会话
 
