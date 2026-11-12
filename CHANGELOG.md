@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-12
+
 ### Added
 - Short options: `-a` (`--apply`), `-p` (`--purge-archived`), `-r` (`--include-recent`), `-u` (`--undo`).
 - `--completion zsh` prints a zsh completion script for options and their values.
@@ -84,7 +86,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.2.0...v0.3.0

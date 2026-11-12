@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-12
+
 ### 新增
 - 短参数：`-a`（`--apply`）、`-p`（`--purge-archived`）、`-r`（`--include-recent`）、`-u`（`--undo`）。
 - `--completion zsh` 输出 zsh 补全脚本，可以补全参数和取值。
@@ -84,7 +86,8 @@
 - `--version`，以及带示例的 `--help`。
 - 中英文输出，按系统语言自动选择；可用 `CLAUDE_SESSION_SYNC_LANG=en|zh` 覆盖。
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.2.0...v0.3.0
