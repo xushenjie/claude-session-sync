@@ -1292,3 +1292,130 @@ def test_ctrl_c_exits_cleanly(env, monkeypatch, capsys):
     assert e.value.code == 130
     assert "Cancelled" in capsys.readouterr().err
     assert cli_ids(env.index_entries()) == ["existing"]
+
+
+# ---------------------------------------------------------------- 参数不写值时交互选择
+
+
+def answers(monkeypatch, *lines):
+    """方向键之外需要输入文字的地方（如别名）。"""
+    it = iter(lines)
+    monkeypatch.setattr(cli, "_input", lambda prompt="": next(it))
+
+
+@pytest.mark.parametrize("flag", ["--lang", "--account", "--set-alias", "--project", "--exclude", "--icons"])
+def test_valueless_flag_needs_terminal(env, capsys, flag):
+    env.add_index("existing")
+    with pytest.raises(SystemExit) as e:
+        env.run(flag)
+    assert e.value.code == 2
+    assert f"{flag} needs a value" in capsys.readouterr().err
+
+
+def test_valueless_account_picks_accounts(env, monkeypatch):
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    env.add_cli_session("new-1")
+    press(monkeypatch, "space", "enter", "enter")  # 去掉第一个组织，确认；菜单回车写入
+    env.run("--account")
+    assert cli_ids(env.index_entries()) == ["existing"]
+    assert cli_ids(env.index_entries(ACCT, ORG_EMPTY)) == ["new-1"]
+
+
+def test_valueless_set_alias_wizard(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    # 第 1 个起名 work，第 2 个起名 side，完成
+    press(monkeypatch, "enter", *"work", "enter", "down", "enter", *"side", "enter", "q")
+    env.run("--set-alias")
+    aliases = json.loads((env.journal / "accounts.json").read_text())["aliases"]
+    assert aliases == {f"{ACCT}/{ORG}": "work", f"{ACCT}/{ORG_EMPTY}": "side"}
+    # 输入框预先填好 "work"：退格两次改成 "wo" + "w" = "wow"
+    press(monkeypatch, "enter", "backspace", "backspace", "w", "enter", "q")
+    env.run("--set-alias")
+    assert json.loads((env.journal / "accounts.json").read_text())["aliases"][f"{ACCT}/{ORG}"] == "wow"
+    press(monkeypatch, "enter", "\x15", "enter", "q")  # Ctrl-U 清空 = 删除别名
+    env.run("--set-alias")
+    aliases = json.loads((env.journal / "accounts.json").read_text())["aliases"]
+    assert aliases == {f"{ACCT}/{ORG_EMPTY}": "side"}
+
+
+def test_remove_account_level_alias_keeps_other_orgs(env):
+    book = {"aliases": {ACCT: "shared"}, "accounts": {}}
+    accts = [(None, ACCT, ORG, None), (None, ACCT, ORG_EMPTY, None)]
+    cli.remove_alias(book, accts, ACCT, ORG)
+    assert book["aliases"] == {f"{ACCT}/{ORG_EMPTY}": "shared"}
+
+
+def test_valueless_project_picks_project(env, monkeypatch):
+    env.add_index("existing")
+    env.add_cli_session("a", cwd="/work/alpha", project="-work-alpha")
+    env.add_cli_session("b", cwd="/work/alpha", project="-work-alpha")
+    env.add_cli_session("c", cwd="/work/beta", project="-work-beta")
+    press(monkeypatch, "down", "down", "enter", "enter")  # 第 3 项是 /work/beta（第 1 项是全部）
+    env.run("--project")
+    assert cli_ids(env.index_entries()) == ["c", "existing"]
+
+
+def test_valueless_exclude_and_manage_list(env, monkeypatch):
+    env.add_index("existing")
+    env.add_cli_session("a", text="task a")
+    env.add_cli_session("b", text="task b")
+    press(monkeypatch, "space", "enter", "y", "enter")  # 排除第 1 个并记住；写入
+    env.run("--exclude")
+    assert len(cli_ids(env.index_entries())) == 2
+    assert len(cli.read_exclude_file(cli.default_exclude_file())) == 1
+    press(monkeypatch, "space", "enter", "enter")  # 从排除列表移除它，然后写入
+    env.run("--exclude-file")
+    assert cli.read_exclude_file(cli.default_exclude_file()) == set()
+    assert len(cli_ids(env.index_entries())) == 3
+
+
+def test_valueless_save_defaults_opens_form(env, monkeypatch):
+    env.add_index("existing")
+    press(monkeypatch, "right", "right", "down", "right", "enter")  # 语言 → English，图标 → emoji
+    env.run("--save-defaults")
+    assert cli.load_config() == {"lang": "en", "icons": "emoji", "layout": "auto", "color": "auto", "ui": "keys"}
+
+
+def test_save_defaults_with_values_skips_form(env, monkeypatch):
+    env.add_index("existing")
+    press(monkeypatch)  # 不应该读任何按键
+    env.run("--save-defaults", "--lang", "zh")
+    assert cli.load_config()["lang"] == "zh"
+
+
+def test_valueless_icons_and_lang(env, monkeypatch, capsys):
+    env.add_index("existing")
+    press(monkeypatch, "down", "enter", "down", "enter")  # 语言选 English（第 2 项），图标选 emoji
+    env.run("--lang", "--icons")
+    assert "⚪" in capsys.readouterr().out
+
+
+def test_show_template_picks_account(env, monkeypatch, capsys):
+    env.add_index("existing")
+    env.org_dir(ACCT, ORG_EMPTY)
+    press(monkeypatch, "down", "enter")
+    env.run("--show-template")
+    out = capsys.readouterr().out
+    assert ORG_EMPTY in out and f"[{ACCT}/{ORG}]" not in out
+
+
+def test_completion_marks_optional_values(capsys):
+    cli.main(["--lang", "en", "--completion"])
+    out = capsys.readouterr().out
+    assert "--account[" in out and "::ID:" in out and "::icons:(symbols emoji ascii)" in out
+
+
+def test_edit_line_moves_cursor_and_handles_cjk(monkeypatch):
+    press(monkeypatch, "left", "left", "中", "end", "space", "!", "enter")
+    assert cli.edit_line("> ", "abc") == "a中bc !"
+    press(monkeypatch, "x", "esc")
+    assert cli.edit_line("> ", "abc") is None
+
+
+def test_ask_text_without_keys_keeps_default(monkeypatch):
+    answers(monkeypatch, "")
+    assert cli.ask_text("> ", "old") == "old"
+    answers(monkeypatch, " new ")
+    assert cli.ask_text("> ", "old") == "new"
