@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
 ### Added
 - `accounts.json` is now a book of every account/organization directory the tool has seen. An account whose directory is gone (signed out of the desktop app, or its data was cleared) stays in the list, dimmed as "directory gone" with when it was last seen, instead of silently disappearing. Upgrading recovers past accounts from the write journals.
 - `--forget-account` and the menu key `g` remove a gone account from `accounts.json`; `--json` lists gone accounts under `missing_accounts`.
@@ -100,7 +102,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--version` and `--help` with examples.
 - English and Chinese output, chosen from the locale; override with `CLAUDE_SESSION_SYNC_LANG=en|zh`.
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.0...v0.3.1
