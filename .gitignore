@@ -1,13 +1,69 @@
+# Python
 __pycache__/
-*.py[cod]
-.venv/
-venv/
+*.py[codz]
+*$py.class
 build/
 dist/
 *.egg-info/
+.eggs/
+uv.lock
+
+# Virtualenvs / local interpreter pins (CI covers 3.9 and 3.14)
+.venv*/
+venv/
+.python-version
+
+# Test / lint / profiling caches
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.dmypy.json
+.tox/
+.nox/
+.cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+*.prof
+*.log
+
+# Editors / IDEs
+.idea/
+.vscode/
+.zed/
+.history/
+*.sublime-project
+*.sublime-workspace
+.*.sw?
+*~
+
+# OS
 .DS_Store
-uv.lock
+Thumbs.db
+
+# AI coding agents (AGENTS.md / CLAUDE.md stay tracked)
+AGENTS.override.md
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+.codex/
+.cursor/
+.windsurf/
+.gemini/
+.continue/
+.aider*
+.plans/
+.scratch/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+.envrc
+.direnv/
+
+# Real user data must never be committed (tests use hand-written fakes)
+claude-code-sessions/
+.claude-desktop-sync/
+*.jsonl
