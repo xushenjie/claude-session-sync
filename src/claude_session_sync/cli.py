@@ -899,34 +899,52 @@ def edit_form(title, fields):
     return {f["label"]: f["choices"][cur][0] for f, cur in zip(fields, current)}
 
 
+def edit_line(prompt, default=""):
+    """单行编辑器（逐键读取）：预先填好 default；←→ 移动光标，退格删除，Home/End，Ctrl-U 清空，
+    回车确认，Esc 取消（返回 None）。不依赖 readline（macOS 自带的 libedit 不支持预填）。"""
+    buf, pos = list(default), len(default)
+    with RawKeys():
+        sys.stdout.write("\033[?25h")  # 编辑时需要看到光标
+        while True:
+            after = disp_width("".join(buf[pos:]))
+            sys.stdout.write("\r\033[K" + prompt + "".join(buf) + (f"\033[{after}D" if after else ""))
+            sys.stdout.flush()
+            key = read_key()
+            if key == "enter":
+                break
+            if key == "esc":
+                sys.stdout.write("\r\033[K")
+                return None
+            if key == "backspace" and pos:
+                del buf[pos - 1]
+                pos -= 1
+            elif key == "left" and pos:
+                pos -= 1
+            elif key == "right" and pos < len(buf):
+                pos += 1
+            elif key == "home":
+                pos = 0
+            elif key == "end":
+                pos = len(buf)
+            elif key == "\x15":  # Ctrl-U
+                buf, pos = [], 0
+            elif key == "space" or (len(key) == 1 and key.isprintable()):
+                buf.insert(pos, " " if key == "space" else key)
+                pos += 1
+    print()
+    return "".join(buf).strip()
+
+
 def ask_text(prompt, default=""):
-    """输入一行文字。POSIX 上把默认值预先填进输入框（回车保留、退格修改）；
-    其他情况提示默认值，直接回车保留。返回 None 表示取消。"""
-    prefilled = False
-    if default and _keys is None and _input is input and os.name != "nt":
-        try:
-            import readline
-
-            readline.set_startup_hook(lambda: readline.insert_text(default))
-            prefilled = True
-        except ImportError:
-            pass
-    shown = (
-        prompt
-        if prefilled or not default
-        else f"{prompt}" + muted(t(f"[Enter keeps “{default}”] ", f"［回车保留“{default}”］"))
-    )
-    try:
-        answer = ask(shown)
-    finally:
-        if prefilled:
-            import readline
-
-            readline.set_startup_hook(None)
+    """输入一行文字。能逐键读取时把默认值预先填进输入框（回车保留、退格修改）；
+    否则提示默认值，直接回车保留。返回 None 表示取消。"""
+    if keys_available():
+        return edit_line(prompt, default)
+    shown = prompt + (muted(t(f"[Enter keeps “{default}”] ", f"［回车保留“{default}”］")) if default else "")
+    answer = ask(shown)
     if answer is None:
         return None
-    answer = answer.strip()
-    return answer if (answer or prefilled) else default
+    return answer.strip() or default
 
 
 def confirm_key(question, default=False):
@@ -2321,6 +2339,247 @@ def save_config(cfg):
     return p
 
 
+# ---------------------------------------------------------------- 交互式向导
+#
+# 需要值的参数不写值时（如只写 --account），在终端里弹出对应的选择；不在终端里时报错退出。
+
+
+class _Ask:
+    """参数没写值时填入的占位标记（不用字符串，免得被 argparse 拿去和 choices 比较）。"""
+
+    def __repr__(self):
+        return "ASK"
+
+
+ASK = _Ask()
+
+CONFIG_FLAGS = (
+    "--lang", "--color", "--icons", "--layout", "-p", "--purge-archived", "--no-purge-archived",
+    "-r", "--include-recent", "--no-include-recent", "--per-account-archive", "--no-per-account-archive",
+)  # fmt: skip
+
+
+def need_terminal(flag, interactive):
+    if not interactive:
+        print(
+            t(
+                f"{flag} needs a value here; run it in a terminal to pick one interactively.",
+                f"{flag} 需要一个值；在终端里运行时可以不写值，从列表里选择。",
+            ),
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+def ask_option(title, choices, current):
+    """从 [(值, 显示文字)] 里选一个，光标停在当前值上；取消时保持当前值。"""
+    options = [{"label": text, "value": v, "note": t("current", "当前") if v == current else ""} for v, text in choices]
+    default = next((i for i, (v, _) in enumerate(choices) if v == current), 0)
+    picked = select_one(title, options, default=default)
+    return current if picked is None else picked
+
+
+LANG_CHOICES = [("zh", "中文"), ("en", "English")]
+COLOR_CHOICES = [("auto", "auto"), ("always", "always"), ("never", "never")]
+ICON_CHOICES = [("symbols", "symbols  ● ✓ ⚠"), ("emoji", "emoji  🟢 ✅ ⚠️"), ("ascii", "ascii  * OK !")]
+LAYOUT_CHOICES = [("auto", "auto"), ("boxed", "boxed"), ("plain", "plain")]
+
+
+def account_option(acct, org, ctx, note=""):
+    name = account_label(acct, org, ctx.book, ctx.cli_acct, with_cli=False).split(" · ")[0]
+    ids = f"{acct[:8]}/{org[:8]}"
+    label = f"{name}  {ids}" if name else ids
+    if is_cli_account(acct, org, ctx.cli_acct):
+        label += "  " + t("(current CLI login)", "（当前 CLI 登录）")
+    return {"label": label, "note": note}
+
+
+def pick_accounts(ctx):
+    """多选账号，返回 "账号ID/组织ID" 列表（给 --account 用）；取消时退出。"""
+    options = [account_option(a, o, ctx) for _, a, o, _ in ctx.all_accts]
+    picked = select_many(t("Accounts to sync", "要同步的账号"), options)
+    if picked is None:
+        sys.exit(t(*CANCELLED))
+    return [f"{ctx.all_accts[i][1]}/{ctx.all_accts[i][2]}" for i in picked]
+
+
+def pick_project(ctx):
+    """按工作目录列出会话数，选一个；返回 --project 的值（None 表示全部）。"""
+    sessions, _ = scan_cli_sessions(ctx.projects)
+    counts = {}
+    for s in sessions:
+        counts[s["cwd"]] = counts.get(s["cwd"], 0) + 1
+    order = sorted(counts, key=lambda c: (-counts[c], c))
+    options = [
+        {
+            "label": t("All projects", "全部项目"),
+            "value": "",
+            "note": t(f"{len(sessions)} sessions", f"{len(sessions)} 个会话"),
+        }
+    ]
+    options += [
+        {"label": short_path(c), "value": c, "note": t(f"{counts[c]} sessions", f"{counts[c]} 个会话")} for c in order
+    ]
+    picked = select_one(t("Only handle sessions in", "只处理哪个项目的会话"), options)
+    if picked is None:
+        sys.exit(t(*CANCELLED))
+    return picked or None
+
+
+def pick_excludes(ctx):
+    """多选要排除的会话（默认都不选）；可以顺便记到 exclude.txt。返回会话 ID 列表。"""
+    sessions, _ = scan_cli_sessions(ctx.projects)
+    sessions.sort(key=lambda s: -s["lastActivityAt"])
+    options = [
+        {"label": f"{format_time(s['lastActivityAt'])}  {s['title']}", "note": fit(short_path(s["cwd"]), 32)}
+        for s in sessions
+    ]
+    picked = select_many(t("Sessions to leave out", "要排除的会话"), options, selected=[])
+    if picked is None:
+        sys.exit(t(*CANCELLED))
+    chosen = [sessions[i] for i in picked]
+    if chosen and confirm_key(t("Also remember them for later runs?", "也记到排除列表，以后运行都跳过？")):
+        path = add_to_exclude_file(chosen)
+        print(muted(t(f"Saved to {path}.", f"已记到 {path}。")))
+    return [s["id"] for s in chosen]
+
+
+def manage_exclude_file():
+    """查看 exclude.txt，勾选要移除的行（移除后这些会话会重新同步）。"""
+    path = default_exclude_file()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    entries = [(i, ln) for i, ln in enumerate(lines) if ln.split("#", 1)[0].strip()]
+    if not entries:
+        print(muted(t(f"The exclude list is empty ({path}).", f"排除列表是空的（{path}）。")))
+        return
+    options = []
+    for _, ln in entries:
+        sid, _, comment = ln.partition("#")
+        options.append({"label": comment.strip() or sid.strip(), "note": sid.strip()[:8]})
+    picked = select_many(
+        t(f"Remove from the exclude list ({len(entries)})", f"从排除列表移除（共 {len(entries)} 个）"),
+        options,
+        selected=[],
+    )
+    if not picked:
+        return
+    drop = {entries[i][0] for i in picked}
+    path.write_text("".join(ln + "\n" for i, ln in enumerate(lines) if i not in drop), encoding="utf-8")
+    print(
+        ok(f"{sym('ok')} ")
+        + t(f"Removed {len(drop)}; they will sync again.", f"已移除 {len(drop)} 个，之后会重新同步。")
+    )
+
+
+def current_alias(book, acct, org):
+    return book["aliases"].get(f"{acct}/{org}") or book["aliases"].get(acct) or ""
+
+
+def remove_alias(book, accts, acct, org):
+    """删除某个组织的别名。如果名称是按账号设置的，把它下放到同账号的其他组织，免得它们一起丢名字。"""
+    book["aliases"].pop(f"{acct}/{org}", None)
+    shared = book["aliases"].pop(acct, None)
+    if shared:
+        for _, a, o, _ in accts:
+            if a == acct and o != org:
+                book["aliases"].setdefault(f"{a}/{o}", shared)
+
+
+def alias_wizard(ctx):
+    """给账号起名：选账号 → 输入名称（预先填好当前别名）；可以连续设置，Esc 或"完成"结束。"""
+    book = ctx.book
+    while True:
+        options = []
+        for _, a, o, _ in ctx.all_accts:
+            alias = current_alias(book, a, o)
+            info = account_label(a, o, book, ctx.cli_acct)
+            if alias and info.startswith(alias):
+                info = info[len(alias) :].lstrip(" ·")
+            label = f"{a[:8]}/{o[:8]}" + (f"  {info}" if info else "")
+            options.append({"label": label, "note": alias or t("(no name)", "（未命名）")})
+        options.append({"label": t("Done", "完成"), "key": "q", "value": "done"})
+        picked = select_one(t("Name which account?", "给哪个账号起名？"), options)
+        if picked in (None, "done"):
+            return
+        _, a, o, _ = ctx.all_accts[picked]
+        ids = f"{a[:8]}/{o[:8]}"
+        name = ask_text(
+            t(f"Name for {ids} (empty removes it): ", f"{ids} 的名称（清空 = 删除）："), current_alias(book, a, o)
+        )
+        if name is None:
+            continue
+        if name:
+            book["aliases"][f"{a}/{o}"] = name
+            print(ok(f"{sym('ok')} ") + t(f"Alias set: {ids} = {name}", f"已设置别名：{ids} = {name}"))
+        else:
+            remove_alias(book, ctx.all_accts, a, o)
+            print(ok(f"{sym('ok')} ") + t(f"Alias removed: {ids}", f"已删除别名：{ids}"))
+        save_account_book(book)
+
+
+def settings_wizard(cfg):
+    """默认设置表单：←→ 改值，回车保存到 config.toml。"每次询问""自动"表示不写这一项。"""
+    ask_choices = [("ask", t("ask each time", "每次询问")), (True, t("always", "总是")), (False, t("never", "从不"))]
+    fields = [
+        {"key": "lang", "label": t("Language", "语言"), "choices": [("auto", t("system", "跟随系统"))] + LANG_CHOICES},
+        {"key": "icons", "label": t("Icons", "图标"), "choices": ICON_CHOICES},
+        {"key": "layout", "label": t("Layout", "布局"), "choices": LAYOUT_CHOICES},
+        {"key": "color", "label": t("Colors", "颜色"), "choices": COLOR_CHOICES},
+        {"key": "purge_archived", "label": t("Purge archived", "清除已归档"), "choices": ask_choices},
+        {"key": "include_recent", "label": t("Running sessions", "运行中的会话"), "choices": ask_choices},
+        {
+            "key": "ui",
+            "label": t("Pickers", "选择方式"),
+            "choices": [("keys", t("arrow keys", "方向键")), ("simple", t("type numbers", "输入编号"))],
+        },
+    ]
+    defaults = {
+        "lang": "auto",
+        "icons": "symbols",
+        "layout": "auto",
+        "color": "auto",
+        "purge_archived": "ask",
+        "include_recent": "ask",
+        "ui": "keys",
+    }
+    for f in fields:
+        f["value"] = cfg.get(f["key"], defaults[f["key"]])
+    result = edit_form(t("Defaults", "默认设置"), fields)
+    if result is None:
+        print(muted(t("Not saved.", "未保存。")))
+        return None
+    new = dict(cfg)
+    for f in fields:
+        v = result[f["label"]]
+        if v in ("auto", "ask") and f["key"] in ("lang", "purge_archived", "include_recent"):
+            new.pop(f["key"], None)
+        else:
+            new[f["key"]] = v
+    p = save_config(new)
+    print(ok(f"{sym('ok')} ") + t(f"Saved to {p}", f"已保存到 {p}"))
+    return new
+
+
+def resolve_asks(args, ctx, cfg, interactive):
+    """把参数里的 ASK 换成交互选择的结果。需要账号/会话数据的放在加载 ctx 之后。"""
+    if args.account and ASK in args.account:
+        need_terminal("--account", interactive)
+        args.account = [a for a in args.account if a is not ASK] + pick_accounts(ctx)
+    if args.project is ASK:
+        need_terminal("--project", interactive)
+        args.project = pick_project(ctx)
+    if args.exclude and ASK in args.exclude:
+        need_terminal("--exclude", interactive)
+        args.exclude = [x for x in args.exclude if x is not ASK] + pick_excludes(ctx)
+    if args.exclude_file is ASK:
+        need_terminal("--exclude-file", interactive)
+        manage_exclude_file()
+        args.exclude_file = None
+
+
 # ---------------------------------------------------------------- 主流程
 
 
@@ -2329,7 +2588,7 @@ def apply_lang_flag(argv, cfg=None):
     优先级：--lang > CLAUDE_SESSION_SYNC_LANG > 配置文件 > 系统语言。非法取值交给正式的解析器报错。"""
     global _LANG_ZH
     pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument("--lang")
+    pre.add_argument("--lang", nargs="?")
     known, _ = pre.parse_known_args(argv)
     if known.lang in ("en", "zh"):
         _LANG_ZH = known.lang == "zh"
@@ -2446,10 +2705,11 @@ def zsh_completion(ap):
         value = ""
         if action.nargs != 0:
             meta = action.metavar or action.dest
+            colon = "::" if action.nargs == "?" else ":"  # 值可选：不写值时进入交互选择
             if action.choices:
-                value = f":{meta}:(" + " ".join(map(str, action.choices)) + ")"
+                value = f"{colon}{meta}:(" + " ".join(map(str, action.choices)) + ")"
             else:
-                value = f":{meta}:{ZSH_FILE_ARGS.get(opts[-1], ' ')}"
+                value = f"{colon}{meta}:{ZSH_FILE_ARGS.get(opts[-1], ' ')}"
         if len(opts) > 1 and not repeat:
             specs.append(f"'{excl}'" + "{" + ",".join(opts) + "}" + f"'[{desc}]{value}'")
         else:
@@ -2512,6 +2772,8 @@ Notes:
     purge_archived, include_recent, per_account_archive); --save-defaults saves
     the current options. If purge_archived or include_recent is unset, a
     terminal run asks each time it matters.
+  * Options that take a value can be given without one in a terminal
+    (e.g. --account, --set-alias, --lang): you then pick from a list.
   * Output language: --lang, CLAUDE_SESSION_SYNC_LANG, config.toml, the locale.
   * The desktop index format is undocumented and may break with desktop updates.
 """,
@@ -2523,6 +2785,8 @@ Notes:
     purge_archived、include_recent、per_account_archive），
     可以用 --save-defaults 保存当前参数。
     purge_archived、include_recent 没设置时，在终端里遇到相关情况会当场询问。
+  * 需要值的参数在终端里可以不写值（如 --account、--set-alias、--lang），
+    运行时从列表里选择。
   * 输出语言：依次看 --lang、CLAUDE_SESSION_SYNC_LANG、config.toml、系统语言。
   * 桌面端索引格式无官方文档，桌面端更新后可能失效。
 """,
@@ -2565,6 +2829,8 @@ Notes:
     common.add_argument(
         "--lang",
         choices=["en", "zh"],
+        nargs="?",
+        const=ASK,
         help=t(
             "output language (default: from CLAUDE_SESSION_SYNC_LANG, config.toml or the locale)",
             "输出语言（默认：按 CLAUDE_SESSION_SYNC_LANG、config.toml 或系统语言）",
@@ -2585,6 +2851,8 @@ Notes:
     pick.add_argument(
         "--account",
         action="append",
+        nargs="?",
+        const=ASK,
         metavar="ID",
         help=t(
             "only sync this account; an ID prefix such as the 8 characters shown in the output works, "
@@ -2595,6 +2863,8 @@ Notes:
     pick.add_argument(
         "--set-alias",
         action="append",
+        nargs="?",
+        const=ASK,
         metavar="ID=NAME",
         help=t(
             "give an account a display name, e.g. b8073c71=work (ID prefix, optionally /<org-id-prefix>); "
@@ -2604,6 +2874,8 @@ Notes:
     )
     pick.add_argument(
         "--project",
+        nargs="?",
+        const=ASK,
         metavar="TEXT",
         help=t(
             "only handle sessions whose working directory contains this string (sync and purge)",
@@ -2613,12 +2885,16 @@ Notes:
     pick.add_argument(
         "--exclude",
         action="append",
+        nargs="?",
+        const=ASK,
         default=[],
         metavar="SESSION_ID",
         help=t("session ID to skip in sync and purge (repeatable)", "排除的会话ID，同步和清除都跳过（可多次使用）"),
     )
     pick.add_argument(
         "--exclude-file",
+        nargs="?",
+        const=ASK,
         metavar="FILE",
         help=t("file with session IDs to exclude, one per line", "排除列表文件，每行一个会话ID"),
     )
@@ -2650,6 +2926,8 @@ Notes:
     out.add_argument(
         "--color",
         choices=["auto", "always", "never"],
+        nargs="?",
+        const=ASK,
         default="auto",
         help=t(
             "colored output (default: auto, only in a terminal; NO_COLOR is honored)",
@@ -2659,6 +2937,8 @@ Notes:
     out.add_argument(
         "--icons",
         choices=["symbols", "emoji", "ascii"],
+        nargs="?",
+        const=ASK,
         default="symbols",
         help=t(
             "status icons: symbols (✓ ↓ ⚠, default), emoji (✅ 📥 ⚠️), or ascii",
@@ -2669,6 +2949,8 @@ Notes:
     out.add_argument(
         "--layout",
         choices=["auto", "boxed", "plain"],
+        nargs="?",
+        const=ASK,
         default="auto",
         help=t(
             "boxed panels and tables, or plain text (default: auto, boxed only in a terminal)",
@@ -2716,6 +2998,8 @@ Notes:
     other.add_argument(
         "--completion",
         choices=["zsh"],
+        nargs="?",
+        const="zsh",
         help=t(
             'print a shell completion script and exit, e.g. eval "$(claude-session-sync --completion zsh)"',
             '输出 shell 补全脚本后退出，例如 eval "$(claude-session-sync --completion zsh)"',
@@ -3032,16 +3316,44 @@ def run(argv=None):
     if args.completion:
         print(zsh_completion(ap), end="")
         return
-    setup_terminal("never" if args.json else args.color, args.icons, "plain" if args.json else args.layout)
-    global _UI
+    global _UI, _LANG_ZH
     _UI = cfg.get("ui", "keys")
+    interactive = not args.no_input and not args.json and is_interactive()
+
+    def terminal():
+        def val(name, default):
+            v = getattr(args, name)
+            return default if v is ASK else v
+
+        color, icons, layout = val("color", "auto"), val("icons", "symbols"), val("layout", "auto")
+        setup_terminal("never" if args.json else color, icons, "plain" if args.json else layout)
+
+    terminal()
+    # 只写了参数名、没写值：当场选择
+    if args.lang is ASK:
+        need_terminal("--lang", interactive)
+        args.lang = ask_option(t("Output language", "输出语言"), LANG_CHOICES, "zh" if t("en", "zh") == "zh" else "en")
+        _LANG_ZH = args.lang == "zh"
+    for name, choices, title in (
+        ("color", COLOR_CHOICES, t("Colors", "颜色")),
+        ("icons", ICON_CHOICES, t("Icons", "图标")),
+        ("layout", LAYOUT_CHOICES, t("Layout", "布局")),
+    ):
+        if getattr(args, name) is ASK:
+            need_terminal(f"--{name}", interactive)
+            current = cfg.get(name) or {"color": "auto", "icons": "symbols", "layout": "auto"}[name]
+            setattr(args, name, ask_option(title, choices, current))
+            terminal()
+    argv_list = sys.argv[1:] if argv is None else list(argv)
+    if args.save_defaults and interactive and not any(a.split("=")[0] in CONFIG_FLAGS for a in argv_list):
+        settings_wizard(cfg)  # 只写了 --save-defaults：打开设置表单
+        return
     if args.save_defaults:
         saved = {k: getattr(args, k, None) for k in CONFIG_KEYS if getattr(args, k, None) is not None}
         p = save_config(saved)
         if not args.json:
             items = ", ".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in saved.items())
             print(style(sym("ok"), "green"), t(f"Saved defaults to {p}: {items}", f"已保存默认设置到 {p}：{items}"))
-    interactive = not args.no_input and not args.json and is_interactive()
     if args.interactive and not interactive:
         sys.exit(
             t(
@@ -3055,11 +3367,26 @@ def run(argv=None):
 
     ctx = load_context(args)
     if args.set_alias:
-        set_aliases(args.set_alias, ctx.all_accts)
+        given = [x for x in args.set_alias if x is not ASK]
+        if given:
+            set_aliases(given, ctx.all_accts)
+        if ASK in args.set_alias:
+            need_terminal("--set-alias", interactive)
+            alias_wizard(ctx)
         return
     if args.show_template:
-        show_templates(ctx, ctx.accounts(args))
+        accts = ctx.accounts(args) if args.account and ASK not in args.account else ctx.all_accts
+        if interactive and len(accts) > 1 and not args.account:
+            options = [account_option(a, o, ctx) for _, a, o, _ in accts] + [
+                {"label": t("All accounts", "全部账号"), "value": "all"}
+            ]
+            picked = select_one(t("Show the template of", "查看哪个账号的模板"), options)
+            if picked is None:
+                return
+            accts = accts if picked == "all" else [accts[picked]]
+        show_templates(ctx, accts)
         return
+    resolve_asks(args, ctx, cfg, interactive)
 
     report = build_plan(args, ctx, interactive)
     if args.interactive:
