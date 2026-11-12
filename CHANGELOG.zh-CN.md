@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
 ### 新增
 - `accounts.json` 成为"已知账号簿"，记下工具见过的所有账号/组织目录。目录已经不存在的账号（桌面端退出登录或数据被清理）会继续出现在列表里，暗色标注"目录不存在"和最后见到的时间，不再悄悄消失。升级时会从写入日志里补回以前的账号。
 - `--forget-account` 和菜单按键 `g` 可以把不在的账号从 `accounts.json` 删除；`--json` 输出里列在 `missing_accounts` 下。
@@ -100,7 +102,8 @@
 - `--version`，以及带示例的 `--help`。
 - 中英文输出，按系统语言自动选择；可用 `CLAUDE_SESSION_SYNC_LANG=en|zh` 覆盖。
 
-[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/xushenjie/claude-session-sync/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/xushenjie/claude-session-sync/compare/v0.3.0...v0.3.1
