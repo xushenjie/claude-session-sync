@@ -2285,40 +2285,34 @@ Notes:
     return ap
 
 
-def main(argv=None):
-    use_safe_stdio()
-    cfg = load_config()
-    apply_lang_flag(argv, cfg)
-    ap = build_parser()
-    ap.set_defaults(**cfg)
-    args = ap.parse_args(argv)
-    if args.completion:
-        print(zsh_completion(ap), end="")
-        return
-    setup_terminal("never" if args.json else args.color, args.icons, "plain" if args.json else args.layout)
-    if args.save_defaults:
-        saved = {k: getattr(args, k) for k in CONFIG_KEYS if getattr(args, k) is not None}
-        p = save_config(saved)
-        if not args.json:
-            items = ", ".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in saved.items())
-            print(style(sym("ok"), "green"), t(f"Saved defaults to {p}: {items}", f"已保存默认设置到 {p}：{items}"))
-    interactive = not args.no_input and not args.json and is_interactive()
-    if args.interactive and not interactive:
-        sys.exit(
-            t(
-                "--interactive needs a terminal and cannot be combined with --json or --no-input.",
-                "--interactive 需要在终端里运行，且不能和 --json、--no-input 一起用。",
-            )
-        )
+class Context:
+    """一次运行要用的环境：目录、账号、账号名称、排除列表。筛选条件改变后可以重新生成计划，不必重新加载。"""
 
-    if args.undo:
-        undo(args.force, interactive)
-        return
+    def __init__(self, projects, roots, all_accts, book, cli_acct):
+        self.projects = projects
+        self.roots = roots
+        self.all_accts = all_accts
+        self.book = book
+        self.cli_acct = cli_acct
 
+    def accounts(self, args):
+        """按 --account 筛选后的账号目录。"""
+        if not args.account:
+            return self.all_accts
+        wanted = [resolve_account_key(v, self.all_accts) for v in args.account]
+        return [a for a in self.all_accts if any(a[1] == ac and (og is None or a[2] == og) for ac, og in wanted)]
+
+    def excluded(self, args):
+        excluded = set(args.exclude) | read_exclude_file(default_exclude_file())
+        if args.exclude_file:
+            excluded |= read_exclude_file(Path(args.exclude_file).expanduser(), must_exist=True)
+        return excluded
+
+
+def load_context(args):
     projects = cli_projects_dir(args.projects_dir)
     if not projects.is_dir():
         sys.exit(t(f"CLI sessions directory not found: {projects}", f"找不到 CLI 会话目录：{projects}"))
-
     roots = [Path(r).expanduser() for r in args.desktop_root] if args.desktop_root else candidate_desktop_roots()
     if not roots:
         sys.exit(
@@ -2328,28 +2322,15 @@ def main(argv=None):
                 "找不到桌面端的 claude-code-sessions 目录。请先在桌面端建一个 Code 会话，或用 --desktop-root 指定路径。",
             )
         )
-
-    accts = account_dirs(roots)
-    if not accts:
+    all_accts = account_dirs(roots)
+    if not all_accts:
         sys.exit(t("No account directories found.", "没有找到任何账号目录。"))
-    if args.set_alias:
-        set_aliases(args.set_alias, accts)
-        return
-    if args.account:
-        wanted = [resolve_account_key(v, accts) for v in args.account]
-        accts = [a for a in accts if any(a[1] == ac and (og is None or a[2] == og) for ac, og in wanted)]
+    return Context(projects, roots, all_accts, load_account_book(), cli_login_account())
 
-    book = load_account_book()
-    cli_acct = cli_login_account()
 
-    excluded = set(args.exclude) | read_exclude_file(default_exclude_file())
-    if args.exclude_file:
-        excluded |= read_exclude_file(Path(args.exclude_file).expanduser(), must_exist=True)
-
-    # 读取各账号索引
-    indexes = {}
-    archived_global = set()
-    deleted_global = set()
+def read_indexes(accts):
+    """读取各账号索引；返回 (indexes, 任一账号归档/删除过的, 删除标记)。"""
+    indexes, archived_global, deleted_global = {}, set(), set()
     for _root, acct, org, d in accts:
         entries = load_index(d)
         deleted, archived_local = load_markers(d)
@@ -2364,8 +2345,11 @@ def main(argv=None):
         archived_global |= archived
         deleted_global |= deleted
         indexes[d] = (acct, org, entries, known, archived)
+    return indexes, archived_global, deleted_global
 
-    # 账号目录为空时借用的后备模板（优先同一 root 下的）
+
+def fallback_templates(ctx, accts, indexes):
+    """账号目录为空时借用的后备模板：返回 ({root: 模板}, 任意一个模板)，优先同一 root 下的。"""
     fallback = {}
     for root, _acct, _org, d in accts:
         if root not in fallback:
@@ -2374,45 +2358,70 @@ def main(argv=None):
                 fallback[root] = tpl
     any_fallback = next(iter(fallback.values()), None)
     if any_fallback is None:  # --account 过滤后可能没有，再从全部账号里找
-        for _, _, _, d in account_dirs(roots):
+        for _, _, _, d in ctx.all_accts:
             any_fallback = pick_template(load_index(d))
             if any_fallback:
                 break
-    root_of = {d: root for root, _, _, d in accts}
+    return fallback, any_fallback
 
-    if args.show_template:
-        for _d, (acct, org, entries, _, _) in indexes.items():
-            tpl = pick_template(entries)
-            label = account_label(acct, org, book, cli_acct)
-            label = f" {label}" if label else ""
+
+def show_templates(ctx, accts):
+    indexes, _, _ = read_indexes(accts)
+    for _d, (acct, org, entries, _, _) in indexes.items():
+        tpl = pick_template(entries)
+        label = account_label(acct, org, ctx.book, ctx.cli_acct)
+        label = f" {label}" if label else ""
+        print(
+            t(
+                f"\n[{acct}/{org}]{label} {len(entries)} index file(s)",
+                f"\n[{acct}/{org}]{label} {len(entries)} 个索引文件",
+            )
+        )
+        if tpl:
             print(
-                t(
-                    f"\n[{acct}/{org}]{label} {len(entries)} index file(s)",
-                    f"\n[{acct}/{org}]{label} {len(entries)} 个索引文件",
+                json.dumps(
+                    {k: (v if not isinstance(v, (dict, list)) else f"<{type(v).__name__}>") for k, v in tpl.items()},
+                    ensure_ascii=False,
+                    indent=2,
                 )
             )
-            if tpl:
-                print(
-                    json.dumps(
-                        {
-                            k: (v if not isinstance(v, (dict, list)) else f"<{type(v).__name__}>")
-                            for k, v in tpl.items()
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                )
-            else:
-                print(t("  (no usable template)", "  （无可用模板）"))
-        return
+        else:
+            print(t("  (no usable template)", "  （无可用模板）"))
 
-    sessions, skipped = scan_cli_sessions(projects)
+
+def plan_purge_all(ctx, excluded, project):
+    """清除时始终覆盖全部账号，避免 --account 过滤后其他账号残留指向已删 .jsonl 的索引；
+    --exclude 和 --project 仍然生效，正在写入的会话按 .jsonl 修改时间单独判断。"""
+    all_idx, all_archived = {}, set()
+    for _root, acct, org, d in ctx.all_accts:
+        entries = load_index(d)
+        _, archived_local = load_markers(d)
+        all_archived |= {
+            e.get("cliSessionId")
+            for f, e in entries
+            if isinstance(e, dict)
+            and (is_archived(e) or f.stem in archived_local or e.get("sessionId") in archived_local)
+        }
+        all_idx[d] = (acct, org, entries, None, None)
+    return plan_purge(all_idx, all_archived, ctx.projects, excluded=excluded, project=project)
+
+
+def build_plan(args, ctx, interactive):
+    """生成同步计划（SyncReport）：每个账号要补哪些会话、要清除哪些已归档会话。不写任何文件。"""
+    accts = ctx.accounts(args)
+    excluded = ctx.excluded(args)
+    indexes, archived_global, deleted_global = read_indexes(accts)
+    fallback, any_fallback = fallback_templates(ctx, accts, indexes)
+    root_of = {d: root for root, _, _, d in accts}
+    book, cli_acct = ctx.book, ctx.cli_acct
+
+    sessions, skipped = scan_cli_sessions(ctx.projects)
     if args.project:
         sessions = [s for s in sessions if args.project in s["cwd"]]
     now = time.time()
     recent = {s["id"] for s in sessions if now - s["mtime"] < RUNNING_GRACE_SEC}
     usable_ids = {s["id"] for s in sessions}
-    all_stems = {f.stem for proj in projects.iterdir() if proj.is_dir() for f in proj.glob("*.jsonl")}
+    all_stems = {f.stem for proj in ctx.projects.iterdir() if proj.is_dir() for f in proj.glob("*.jsonl")}
 
     def build_rows(skip_recent):
         """每个账号要补哪些会话；返回 (rows, 因为最近仍在写入而暂缓的会话 ID)。"""
@@ -2457,129 +2466,169 @@ def main(argv=None):
     rows, held_back = build_rows(set() if args.include_recent else recent)
     if held_back and args.include_recent is None and interactive:
         if ask_include_recent([s for s in sessions if s["id"] in held_back]):
+            args.include_recent = True  # 同一次运行里重新预览时不再问
             rows, held_back = build_rows(set())
-
-    if args.interactive:
-        pick_interactively(rows)
 
     # 没指定 --[no-]purge-archived 时，只在终端里找出可清除的会话，写入时再询问
     want_purge = args.purge_archived if args.purge_archived is not None else interactive
     purge = None
     if want_purge:
-        # 清除时始终覆盖全部账号，避免 --account 过滤后其他账号残留指向已删 .jsonl 的索引；
-        # --exclude 和 --project 仍然生效，正在写入的会话按 .jsonl 修改时间单独判断
-        all_idx, all_archived = {}, set()
-        for _root, acct, org, d in account_dirs(roots):
-            entries = load_index(d)
-            _, archived_local = load_markers(d)
-            all_archived |= {
-                e.get("cliSessionId")
-                for f, e in entries
-                if isinstance(e, dict)
-                and (is_archived(e) or f.stem in archived_local or e.get("sessionId") in archived_local)
-            }
-            all_idx[d] = (acct, org, entries, None, None)
-        purge = plan_purge(all_idx, all_archived, projects, excluded=excluded, project=args.project)
+        purge = plan_purge_all(ctx, excluded, args.project)
         if args.purge_archived is None and not purge[0]:
             purge = None  # 没要求清除、也没有可清除的，就不在预览里多显示一节
+    return SyncReport(rows, sessions, skipped, recent, held_back, purge, archived_global, deleted_global)
 
-    report = SyncReport(rows, sessions, skipped, recent, held_back, purge, archived_global, deleted_global)
+
+def confirm_purge(args, report):
+    """写入前确认清除：要输入 yes。返回是否清除。"""
+    n = len(report.purge_plan())
+    if args.purge_archived:
+        prompt = t(
+            f"Type yes to permanently delete {n} archived session(s) (backed up, --undo restores them): ",
+            f"输入 yes 确认彻底删除 {n} 个已归档会话（会先备份，可 --undo 还原）：",
+        )
+    else:
+        prompt = t(
+            f"Also permanently delete the {n} archived session(s) above? "
+            "Type yes to delete (backed up, --undo restores them), Enter to keep them: ",
+            f"顺便彻底删除上面 {n} 个已归档会话吗？输入 yes 删除（会先备份，可 --undo 还原），回车保留：",
+        )
+    if (ask(prompt) or "").strip().lower() == "yes":
+        return True
+    warn(t("Purge skipped; archived sessions are kept.", "已跳过清除，已归档会话保留。"))
+    return False
+
+
+def write_plan(args, ctx, report, do_purge, interactive):
+    """执行写入（和清除），打印结果；返回写入摘要。"""
+    ensure_desktop_stopped(args.force, interactive)
+    if remember_cli_account(ctx.book, ctx.cli_acct):
+        save_account_book(ctx.book)
+    created, moved = [], []
+    for r in report.rows:
+        if not r["template"]:
+            continue
+        for s in r["todo"]:
+            new_id, entry = build_entry(r["template"], s)
+            out = r["dir"] / f"{new_id}.json"
+            with open(out, "w", encoding="utf-8") as fh:
+                json.dump(entry, fh, ensure_ascii=False, indent=2)
+            created.append(out)
+    stamp = new_stamp()
+    trash = JOURNAL_DIR / f"trash-{stamp}"
+    if do_purge:
+        c2, moved = execute_purge(report.purge_plan(), trash)
+        created += c2
+    journal = write_journal(created, moved, stamp) if created or moved else None
+    if not args.json:
+        print()
+        if journal:
+            summary = [todo(t(f"Created {len(created)} file(s)", f"已写入 {len(created)} 个文件"))]
+            if moved:
+                summary.append(danger(t(f"moved {len(moved)} to backup", f"移除 {len(moved)} 个文件/目录")))
+            print(style(ok(f"{sym('ok')} " + t("Done", "完成")), "bold") + "  " + muted(" · ").join(summary))
+            if moved:
+                tip(t(f"backup: {trash}", f"备份：{trash}"))
+            tip(t(f"journal: {journal}", f"日志：{journal}"))
+            tip(
+                t(
+                    "reopen the desktop app to check; if anything looks wrong, run --undo",
+                    "请重新打开桌面端查看；如有问题运行 --undo 撤销",
+                )
+            )
+        else:
+            print(t("Nothing to write.", "没有需要写入的会话。"))
+    return {"created": len(created), "moved": len(moved), "journal": str(journal) if journal else None}
+
+
+def decide(args, report, interactive):
+    """决定是否写入、是否清除：--apply，或者在终端里预览后从菜单选择。返回 (动作, 是否清除)，
+    动作是 "write" / "undo" / "none"。"""
+    apply, do_purge = args.apply, bool(report.purge_plan())
+    if not (interactive and report.has_work()):
+        return ("write" if apply else "none"), do_purge
+    if not apply and not args.interactive:
+        can_undo = JOURNAL_DIR.exists() and any(JOURNAL_DIR.glob("journal-*.json"))
+        action = choose_action(report, can_undo)
+        if action == "undo":
+            return "undo", False
+        if action == "pick":
+            pick_interactively(report.rows)
+        apply = action in ("write", "pick") and report.has_work()
+        do_purge = do_purge and apply
+    elif not apply:
+        print()
+        apply = confirm(t("Write now?", "现在写入？"))
+    if apply and do_purge:
+        do_purge = confirm_purge(args, report)
+        if not do_purge and not report.n_files():
+            apply = False  # 只剩清除而又跳过了，就不必再检查桌面端、写日志
+    return ("write" if apply else "none"), do_purge
+
+
+def main(argv=None):
+    use_safe_stdio()
+    cfg = load_config()
+    apply_lang_flag(argv, cfg)
+    ap = build_parser()
+    ap.set_defaults(**cfg)
+    args = ap.parse_args(argv)
+    if args.completion:
+        print(zsh_completion(ap), end="")
+        return
+    setup_terminal("never" if args.json else args.color, args.icons, "plain" if args.json else args.layout)
+    if args.save_defaults:
+        saved = {k: getattr(args, k) for k in CONFIG_KEYS if getattr(args, k) is not None}
+        p = save_config(saved)
+        if not args.json:
+            items = ", ".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in saved.items())
+            print(style(sym("ok"), "green"), t(f"Saved defaults to {p}: {items}", f"已保存默认设置到 {p}：{items}"))
+    interactive = not args.no_input and not args.json and is_interactive()
+    if args.interactive and not interactive:
+        sys.exit(
+            t(
+                "--interactive needs a terminal and cannot be combined with --json or --no-input.",
+                "--interactive 需要在终端里运行，且不能和 --json、--no-input 一起用。",
+            )
+        )
+    if args.undo:
+        undo(args.force, interactive)
+        return
+
+    ctx = load_context(args)
+    if args.set_alias:
+        set_aliases(args.set_alias, ctx.all_accts)
+        return
+    if args.show_template:
+        show_templates(ctx, ctx.accounts(args))
+        return
+
+    report = build_plan(args, ctx, interactive)
+    if args.interactive:
+        pick_interactively(report.rows)
     if not args.json:
         report.print_plan(verbose=args.verbose, quiet=args.quiet)
 
-    # 决定是否写入：--apply，或者在终端里预览后从菜单选择
-    apply, do_purge = args.apply, bool(purge and purge[0])
-    if interactive and report.has_work():
-        if not apply and not args.interactive:
-            can_undo = JOURNAL_DIR.exists() and any(JOURNAL_DIR.glob("journal-*.json"))
-            action = choose_action(report, can_undo)
-            if action == "undo":
-                print()
-                undo(args.force, interactive)
-                return
-            if action == "pick":
-                pick_interactively(rows)
-            apply = action in ("write", "pick") and report.has_work()
-            do_purge = do_purge and apply
-        elif not apply:
-            print()
-            apply = confirm(t("Write now?", "现在写入？"))
-        if apply and do_purge:
-            n = len(purge[0])
-            if args.purge_archived:
-                prompt = t(
-                    f"Type yes to permanently delete {n} archived session(s) (backed up, --undo restores them): ",
-                    f"输入 yes 确认彻底删除 {n} 个已归档会话（会先备份，可 --undo 还原）：",
-                )
-            else:
-                prompt = t(
-                    f"Also permanently delete the {n} archived session(s) above? "
-                    "Type yes to delete (backed up, --undo restores them), Enter to keep them: ",
-                    f"顺便彻底删除上面 {n} 个已归档会话吗？输入 yes 删除（会先备份，可 --undo 还原），回车保留：",
-                )
-            answer = ask(prompt)
-            if (answer or "").strip().lower() != "yes":
-                do_purge = False
-                warn(t("Purge skipped; archived sessions are kept.", "已跳过清除，已归档会话保留。"))
-            if not do_purge and not report.n_files():
-                apply = False  # 只剩清除而又跳过了，就不必再检查桌面端、写日志
-
-    written = None
-    if apply:
-        ensure_desktop_stopped(args.force, interactive)
-        if remember_cli_account(book, cli_acct):
-            save_account_book(book)
-        created, moved = [], []
-        for r in rows:
-            if not r["template"]:
-                continue
-            for s in r["todo"]:
-                new_id, entry = build_entry(r["template"], s)
-                out = r["dir"] / f"{new_id}.json"
-                with open(out, "w", encoding="utf-8") as fh:
-                    json.dump(entry, fh, ensure_ascii=False, indent=2)
-                created.append(out)
-        stamp = new_stamp()
-        trash = JOURNAL_DIR / f"trash-{stamp}"
-        if do_purge:
-            c2, moved = execute_purge(purge[0], trash)
-            created += c2
-        journal = write_journal(created, moved, stamp) if created or moved else None
-        written = {"created": len(created), "moved": len(moved), "journal": str(journal) if journal else None}
-        if not args.json:
-            print()
-            if journal:
-                summary = [todo(t(f"Created {len(created)} file(s)", f"已写入 {len(created)} 个文件"))]
-                if moved:
-                    summary.append(danger(t(f"moved {len(moved)} to backup", f"移除 {len(moved)} 个文件/目录")))
-                print(style(ok(f"{sym('ok')} " + t("Done", "完成")), "bold") + "  " + muted(" · ").join(summary))
-                if moved:
-                    tip(t(f"backup: {trash}", f"备份：{trash}"))
-                tip(t(f"journal: {journal}", f"日志：{journal}"))
-                tip(
-                    t(
-                        "reopen the desktop app to check; if anything looks wrong, run --undo",
-                        "请重新打开桌面端查看；如有问题运行 --undo 撤销",
-                    )
-                )
-            else:
-                print(t("Nothing to write.", "没有需要写入的会话。"))
-    elif not args.json and report.has_work():
+    action, do_purge = decide(args, report, interactive)
+    if action == "undo":
+        print()
+        undo(args.force, interactive)
+        return
+    written = write_plan(args, ctx, report, do_purge, interactive) if action == "write" else None
+    if action != "write" and not args.json and report.has_work():
         if interactive:
             print(t("Nothing was written.", "没有写入任何文件。"))
         else:
             print(
-                style(
+                muted(
                     t(
                         "\n(Preview only; nothing was written. Run again with --apply to write.)",
                         "\n（预览模式，未写入任何文件。确认无误后加 --apply 执行。）",
-                    ),
-                    "dim",
+                    )
                 )
             )
-
     if args.json:
-        print(json.dumps(report.to_json(apply, do_purge, written), ensure_ascii=False, indent=2))
+        print(json.dumps(report.to_json(action == "write", do_purge, written), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
